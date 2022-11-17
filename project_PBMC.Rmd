@@ -1,0 +1,111 @@
+---
+title: "CD8 TIL reference mapping"
+author: "Paul Gueguen, Massimo Anreatta, and Santiago  Carmona"
+date: "`r format(Sys.Date(),'%e de %B, %Y')`"
+output: 
+  rmdformats::downcute:
+    lightbox: true
+    thumbnails: false
+    self_contained: true
+    gallery: true
+    code_folding: show
+  pkgdown:
+    as_is: true
+---
+
+```{r, include=FALSE, fig.width=16, fig.height=12}
+renv::restore()
+library(Seurat)
+library(tidyverse)
+library(scGate)
+library(STACAS)
+library(data.table)
+library(GEOquery)
+library(patchwork)
+library(ProjecTILs)
+library(gridExtra)
+library(ggrepel)
+library(UCell)
+library(stringr)
+library(plotly)
+
+#devtools::install_github('satijalab/seurat-data')
+library(SeuratData)
+
+options(future.globals.maxSize= 5000*1024^2)
+```
+
+## Loading reference
+
+```{r}
+path <- "~/Dropbox/CSI/reference_atlases"
+ref.cd8 <- readRDS(sprintf("%s/CD8TIL_human_ss_0.1.rds",path))
+
+cols <- ref.cd8@misc$atlas.palette
+
+# Plotting
+DimPlot(ref.cd8,  group.by = 'functional.cluster', label = T, repel = T, cols = cols) + theme(aspect.ratio = 1)
+```
+
+
+## Mapping of healthy PBMC - multiple technologies
+
+This is a good dataset to test our map as this is blood samples from healthy patients, with many different technologies used.
+
+```{r}
+library(SeuratData)
+
+#SeuratData::AvailableData()
+#SeuratData::InstallData('pbmcsca')
+data('pbmcsca')
+
+pbmcsca <- pbmcsca |> NormalizeData() |> FindVariableFeatures.STACAS() |>  ScaleData() |> RunPCA(npcs=30) |> RunUMAP(dims = 1:30)
+DimPlot(pbmcsca, reduction = 'umap', label = T, group.by = 'CellType')
+
+#DimPlot(pbmcsca, reduction = 'umap', group.by = 'Cluster', split.by = 'Cluster')
+```
+
+```{r fig.height=4}
+FeaturePlot(pbmcsca, features=c("CD2","CD3E","TRAC","IL7R","SELL","GZMK","GZMB","CD8A","CD4"))
+```
+
+Split by tech
+```{r}
+pbmc.list <- SplitObject(pbmcsca, split.by = "Method")
+```
+
+Focus on one tech first
+````{r}
+this <- pbmc.list$`10x Chromium (v3)`
+#this <- pbmc.list$`10x Chromium (v2) B`
+
+this <- this |> NormalizeData() |> FindVariableFeatures.STACAS() |>  ScaleData() |> RunPCA(npcs=30) |> RunUMAP(dims = 1:30)
+DimPlot(this, reduction = 'umap', label = T, group.by = 'CellType')
+
+```
+
+```{r fig.height=5}
+FeaturePlot(this, features=c("CD3E","CD8A","CD4","IL7R","SELL","TCF7","SELL","GZMK","GZMB","PRF1","ZNF683","ITGAE"))
+```
+
+No naive cells in this PBMC dataset? Were they sorted out?
+
+```{r}
+# Mapping
+this.p <- Run.ProjecTILs(this, ref = ref.cd8, filter.cells = T, ncores = 8)
+plot.projection(ref.cd8, this.p, pointsize = 0.2, linesize = 0.5)
+```
+```{r}
+plot.statepred.composition(ref.cd8, query=this.p, cols=ref.cd8@misc$atlas.palette)
+```
+
+```{r fig.height=4, fig.width=8}
+genes4radar <- c('CD3E','CD8A','LEF1', "TCF7", "CCR7", "GZMK", 'FCGR3A','KLRG1',"PDCD1",
+                                  'ZNF683','ITGAE', "GZMB","PRF1", "HAVCR2",
+                                  "TOX", "ENTPD1", 'SLC4A10','TRAV1-2')
+
+plot.states.radar(ref.cd8, query = this.p, min.cells = 10,
+                  genes4radar = genes4radar) 
+
+```
+

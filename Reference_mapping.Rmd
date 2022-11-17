@@ -1,0 +1,2000 @@
+---
+pca---
+title: "CD8 TIL reference mapping"
+author: "Paul Gueguen, Massimo Anreatta, and Santiago  Carmona"
+date: "`r format(Sys.Date(),'%e de %B, %Y')`"
+output: 
+  rmdformats::downcute:
+    lightbox: true
+    thumbnails: false
+    self_contained: true
+    gallery: true
+    code_folding: show
+  pkgdown:
+    as_is: true
+---
+
+```{r, include=FALSE, fig.width=16, fig.height=12}
+renv::restore()
+library(Seurat)
+library(tidyverse)
+library(scGate)
+library(xlsx)
+library(STACAS)
+library(data.table)
+library(GEOquery)
+library(ROGUE)
+library(EnhancedVolcano)
+library(patchwork)
+library(pheatmap)
+library(ProjecTILs)
+library(gridExtra)
+library(ggrepel)
+library(UCell)
+library(stringr)
+library(plotly)
+library(paletteer)
+options(future.globals.maxSize= 5000*1024^2)
+```
+
+# Create ProjecTILs ref from ssSTACAS integrated dataset
+
+## Parameters
+
+```{r}
+inputFile <- "Zheng.CD8.QC.rds"
+myPath <- "~/Dropbox/CSI/Datasets/Human_TIL_Atlas/CD8/"
+npcs <- 30
+nfeatures <- 1000 # similar results vs 2000 but faster
+#seed <- 
+path_cache <- "./cache/"
+cache_filename <- paste0(path_cache,"seurat.list.input.rds")
+
+# Setup colors
+#mycols <- c('Naive' = '#b7d2e0', 'CM' = '#da6f6f','EM'= '#72b28a','TEMRA' = '#e5bfaf', 'TRM' = '#f3a166', 'TPEX' = '#aca6e0' , 'TEX' ='#f5d39f', "MAIT" = '#fdbfd4')
+
+mycolors.tissue <- c("black","gold","seagreen3","firebrick2","mediumorchid3")
+mycolors.cancerType <- c("#F0A0FF" ,"#0075DC" ,"#993F00" ,"#4C005C", "#191919", "#005C31" ,"#2BCE48", "#FFCC99" ,"#808080", "#94FFB5", "#8F7C00", "#9DCC00", "#C20088", "#003380", "#FFA405" ,"#FFA8BB" ,"#426600", "#FF0010" ,"#5EF1F2" ,"#00998F" ,"#E0FF66" ,"#740AFF")
+names(mycolors.cancerType) <- c("AML","BC" ,"BM" ,  "CHOL","CRC","HCC","ESCA","HNSCC","BCL","LUNG","Melanoma","MM","NPC","FTC","OV","PACA","RC","STAD","BCC","SCC","THCA","UCEC")  
+```
+
+## Loading reference
+
+```{r}
+#ref.cd8 <- readRDS(file="~/Dropbox/CSI/Datasets/projectTils/Human_CD8_TILs_atlas.rds")
+
+path <- "~/Dropbox/CSI/reference_atlases"
+ref.cd8 <- readRDS(sprintf("%s/CD8TIL_human_ss_0.1.rds",path))
+
+cols <- ref.cd8@misc$atlas.palette
+
+# Plotting
+DimPlot(ref.cd8,  group.by = 'functional.cluster', label = T, repel = T, cols = cols) + theme(aspect.ratio = 1)
+```
+
+## Reference map DEGs
+
+```{r, fig.height=10, fig.width=7}
+Idents(ref) <- ref$functional.cluster
+markers <- FindAllMarkers(object = ref, only.pos = TRUE, assay = "RNA")
+markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC) -> top10
+Average <- AverageExpression(object = ref, return.seurat = T, assay = "RNA")
+Average <- ScaleData(object = Average, features = rownames(markers))
+DoHeatmap(Average, features = top10$gene, draw.lines = F, group.colors = cols) + scale_fill_viridis_c()
+```
+
+# Projection
+
+Now we can use our ssSTACAS as the reference to map other datasets.
+
+## Mapping of [Sade-Feldman et al. 2018](https://pubmed.ncbi.nlm.nih.gov/30388456/)
+
+For this part we can use the tutorial already built here
+
+```{r, fig.width=14, fig.height=7}
+# Loading Sade Feldman data as Seurat object
+cached.object <- "SadeFeldman.seurat.rds"
+if (!file.exists(cached.object)) {
+    library(GEOquery)
+    geo_acc <- "GSE120575"
+    datadir <- "input/SadeFeldman"
+    gse <- getGEO(geo_acc)
+    series <- paste0(geo_acc, "_series_matrix.txt.gz")
+    system(paste0("mkdir -p ", datadir))
+    getGEOSuppFiles(geo_acc, baseDir = datadir)
+
+    ## Load expression matrix and metadata
+    exp.mat <- read.delim(sprintf("%s/%s/GSE120575_Sade_Feldman_melanoma_single_cells_TPM_GEO.txt.gz",
+        datadir, geo_acc), header = F, sep = "\t")
+    genes <- exp.mat[c(-1, -2), 1]
+    cells <- as.vector(t(exp.mat[1, 2:16292]))
+    samples <- as.factor(t(exp.mat[2, 2:16292]))
+    exp.mat <- exp.mat[c(-1, -2), 2:16292]
+    colnames(exp.mat) <- cells
+    rownames(exp.mat) <- genes
+    meta <- read.delim(sprintf("%s/%s/GSE120575_patient_ID_single_cells.txt.gz",
+        datadir, geo_acc), header = T, sep = "\t", skip = 19, nrows = 16291)
+    meta <- meta[, 1:7]
+    treat <- factor(ifelse(grepl("Post", samples), "Post", "Pre"))
+    response <- factor(meta$characteristics..response)
+    therapy <- factor(meta$characteristics..therapy)
+    ## Create Seurat object and add meta data
+    query.object <- CreateSeuratObject(counts = exp.mat, project = "SadeFeldman",
+        min.cells = 10)
+    rm(exp.mat)
+    query.object@meta.data$Sample <- samples
+    query.object@meta.data$Time <- treat
+    query.object@meta.data$Response <- response
+    query.object@meta.data$Therapy <- therapy
+    saveRDS(query.object, file = cached.object)
+} else {
+    query.object <- readRDS(cached.object)
+}
+
+# Put cell labels as metadata
+meta.sf <-  read.xlsx("Sade_Feldman_clusters_metadata/1-s2.0-S0092867418313941-mmc4.xlsx", sheetIndex = 3)
+names.meta <- meta.sf$Cell.Name
+meta.sf <- meta.sf$Cluster
+names(meta.sf) <- names.meta
+query.object <- AddMetaData(object = query.object, metadata = meta.sf, col.name = "original.labels")
+
+# Take only pre-treatment cells
+query.object <- subset(query.object, subset = Time == "Pre")
+
+# Compare by splitting by patients
+query.projected <- ProjecTILs.classifier(query.object, ref = ref.cd8, filter.cells = T, ncores = 1)
+plot.statepred.composition(ref.cd8, query.projected)
+table.split <- table(query.projected$functional.cluster)
+
+# Radar plots
+query.list <- SplitObject(query.projected, split.by = "Response")
+plot.states.radar(ref.cd8, query = query.list, min.cells = 5, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'SLC4A10','TRAV1-2')) 
+
+# Response to therapy
+pll <- list()
+pll[[1]] <- plot.statepred.composition(ref.cd8, query.list[["Responder"]], metric = "Percent") +
+    ggtitle("Responder") + ylim(0, 52)+ theme_bw()+ RotatedAxis()
+pll[[2]] <- plot.statepred.composition(ref.cd8, query.list[["Non-responder"]], metric = "Percent") +
+    ggtitle("Non-responder") + ylim(0, 52) + theme_bw() + RotatedAxis()
+wrap_plots(pll)
+
+# Save query object
+saveRDS(query.object, file="~/Dropbox/CSI/Datasets/Human_TIL_Atlas//SadeFeldman.example.rds")
+```
+
+### Compare projection of Sade-Feldman data in the Zheng reference
+
+```{r}
+zheng.sadefeldman <- subset(seurat.merged, subset = dataset == "Melanoma.MosheSade-Feldman2018")
+
+# Radars
+plot.states.radar(ref.cd8, query = zheng.sadefeldman, min.cells = 5, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'SLC4A10','TRAV1-2'))
+
+# Proportions
+plot.statepred.composition(ref.cd8, zheng.sadefeldman, metric = "Percent") +
+    ggtitle("Sade Feldman et al. 2018 - Zheng map - 5928 cells") + ylim(0, 50)+ theme_bw()+ RotatedAxis()
+```
+
+## Mapping of [Gueguen et al. 2021](https://pubmed.ncbi.nlm.nih.gov/33514641/)
+
+```{r}
+gueguen.cd3 <- readRDS('~/Dropbox/CSI/Datasets/Gueguen2021/NSCLC_CD3_11tumors.Rds')
+gueguen.cd3$seurat_clusters <- Idents(gueguen.cd3)
+ref <- readRDS(file="~/Dropbox/CSI/Datasets/Human_TIL_Atlas/ss.stacas.projectils.reference.rds")
+
+# scgate
+models <- scGate::get_scGateDB()
+cd8.til <- scGate(gueguen.cd3, model = models$human$CD8_TIL$CD8_TIL_filtering, assay = 'RNA', ncores = 2)
+generic.cd8 <- scGate(gueguen.cd3, assay = 'RNA', model = models$human$generic$CD8T, ncores = 2)
+
+# Projection
+gueguen.cd3 <- ProjecTILs.classifier(gueguen.cd3, ref = ref.cd8, direct.projection = T, filter.cells = T, split.by = 'orig.ident', ncores = 8)
+gueguen.cd3 <- table(gueguen.cd3$functional.cluster)
+DimPlot(query.projected.split, group.by = 'functional.cluster', order = T, cols = cols)
+
+# Compare split and merge projections
+rbind(gueguen.merged, gueguen.split)
+DimPlot(query.projected, group.by = 'functional.cluster', cols = cols, order = T) & ggtitle('projected on merged objects') + DimPlot(query.projected.split, group.by = 'functional.cluster', cols = cols, order = T) & ggtitle('projected on split objects')
+
+# Radar plots
+plot.states.radar(ref, query = query.projected, min.cells = 10, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'TYROBP','KIR2DL1')) 
+
+# Add metadata to original object to plot the ProjecTILs annotation
+gueguen.cd3 <- AddMetaData(object = gueguen.cd3, metadata = query.projected$functional.cluster, col.name = 'functional.cluster')
+gueguen.cd3 <- AddMetaData(object = gueguen.cd3, metadata = query.projected$functional.cluster.conf, col.name = 'functional.cluster.conf')
+DimPlot(gueguen.cd3, group.by = 'functional.cluster', label = T, repel = T, cols = cols)
+FeaturePlot(gueguen.cd3, features  = 'functional.cluster.conf')
+
+# Compare with scGate annotation
+models <- get_scGateDB()
+gueguen.cd3 <- scGate(gueguen.cd3, model = models$human$CD8_TIL, ncores = 1, assay = 'RNA')
+DimPlot(gueguen.cd3, reduction = "umap", group.by = "scGate_multi", label = T, cols = unname(pals::glasbey()))
+
+
+```
+
+### Mapping on Gueguen CD8 only
+
+```{r}
+models <- scGate::get_scGateDB()
+gueguen.cd3 <- scGate(gueguen.cd3, model = models$human$generic$CD8T, ncores = 8, assay = 'RNA')
+gueguen.cd8 <- subset(gueguen.cd3, subset = is.pure == 'Pure')
+
+# Mapping
+query.projected <- make.projection(gueguen.cd8, skip.normalize = T, ref = ref,filter.cells = F, ncores = 1)
+plot.projection(ref, query.projected)
+query.projected <- cellstate.predict(ref = ref, ndim = 20, query = query.projected)
+table(query.projected$functional.cluster)
+
+# Add metadata to original object to plot the ProjecTILs annotation
+gueguen.cd8 <- AddMetaData(object = gueguen.cd8, metadata = query.projected$functional.cluster, col.name = 'functional.cluster')
+gueguen.cd8 <- AddMetaData(object = gueguen.cd8, metadata = query.projected$functional.cluster.conf, col.name = 'functional.cluster.conf')
+DimPlot(gueguen.cd8, group.by = 'functional.cluster', label = T, repel = T, cols = cols)
+FeaturePlot(gueguen.cd8, features  = 'functional.cluster.conf')
+
+# Retry after splitting patients
+query.by.sample <- SplitObject(gueguen.cd8, split.by = "orig.ident")
+query.projected <- make.projection(query.by.sample, ref = ref, filter.cells = F, ncores = 1)
+for (i in seq_along(query.projected)) {
+query.projected[[i]] <- cellstate.predict(ref = ref, ndim = 30, query = query.projected[[i]])
+}
+query.merged <- merge(query.projected[[1]], c(query.projected[2:25]))
+table(query.merged$functional.cluster)
+
+# Add metadata to original object to plot the ProjecTILs annotation
+gueguen.cd8 <- AddMetaData(object = gueguen.cd8, metadata = query.merged$functional.cluster, col.name = 'functional.cluster')
+gueguen.cd8 <- AddMetaData(object = gueguen.cd8, metadata = query.merged$functional.cluster.conf, col.name = 'functional.cluster.conf')
+DimPlot(gueguen.cd8, group.by = 'functional.cluster', label = T, repel = T, cols = cols)
+FeaturePlot(gueguen.cd8, features  = 'functional.cluster.conf')
+```
+
+### Cycling cells analysis
+
+```{r}
+gueguen.cycling <- subset(gueguen.cd8, subset = seurat_clusters %in% c('CD4/8-TOP2A', "CD4/8-MCM5"))
+
+# Radar plots
+plot.states.radar(ref, query = gueguen.cycling, min.cells = 10, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'TYROBP','KIR2DL1')) 
+
+# barplot
+plot.statepred.composition(ref, cols = cols, gueguen.cycling, metric = "Percent") +
+    ggtitle("Cycling cells") + ylim(0, 52) + theme_bw() + RotatedAxis()
+
+# Dimplot
+DimPlot(gueguen.cycling, group.by = 'functional.cluster', label = T, repel = T, cols = cols)
+```
+
+### Mapping with TRM filtered reference
+
+```{r}
+trm.sign <- list(c("ZNF683","ITGAE","CXCR6")) # Same of for scGate model
+names(trm.sign) <- "trm.sign"
+ref.cd8 <- AddModuleScore_UCell(ref.cd8, features = trm.sign, ncores = 4)
+ref.cd8.trm.filter <- subset(ref.cd8, subset = trm.sign_UCell < 0.5)
+ref.cd8.downsample <- subset(ref.cd8,  downsample = 500)
+gueguen.cd3 <- ProjecTILs.classifier(gueguen.cd3, ref = ref.cd8.downsample, split.by = "orig.ident", filter.cells = T, ncores = 8)
+
+# Dimplot
+DimPlot(gueguen.cd3, group.by = 'functional.cluster', label = T, repel = T, cols = ref.cd8.downsample@misc$atlas.palette)
+
+# Radar plots
+plot.states.radar(ref.cd8.downsample, query = gueguen.cd3, min.cells = 10, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'SLC4A10','TRAV1-2')) 
+
+# barplot
+plot.statepred.composition(ref.cd8.downsample,  gueguen.cd3, metric = "Percent")  + ylim(0, 52) + theme_bw() + RotatedAxis()
+
+##### Compare with original mapping
+gueguen.cd3 <- ProjecTILs.classifier(gueguen.cd3, ref = ref.cd8, split.by = "orig.ident", filter.cells = T, ncores = 8)
+
+# Dimplot
+DimPlot(gueguen.cd3, group.by = 'functional.cluster', label = T, repel = T, cols = ref.cd8@misc$atlas.palette)
+
+# Radar plots
+plot.states.radar(ref.cd8, query = gueguen.cd3, min.cells = 10, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'SLC4A10','TRAV1-2')) 
+
+# barplot
+plot.statepred.composition(ref.cd8,  gueguen.cd3, metric = "Percent")  + ylim(0, 52) + theme_bw() + RotatedAxis()
+```
+
+### Mapping of blood samples from Gueguen et al.
+
+```{r}
+gueguen.cd3.blood <- readRDS('~/Dropbox/CSI/Datasets/Gueguen2021/NSCLC_CD3_4tumors_4Juxta_2Juxta.Rds')
+gueguen.cd3.blood <- subset(gueguen.cd3.blood, subset = tissue == "blood")
+
+# Projection
+gueguen.cd3.blood <- ProjecTILs.classifier(gueguen.cd3.blood,  STACAS.k.weight = 5, ref = ref.cd8, filter.cells = T, split.by = "orig.ident", skip.normalize = T, ncores = 1)
+
+# Dimplot
+DimPlot(gueguen.cd3.blood, group.by = 'functional.cluster', label = T, repel = T, cols = ref.cd8@misc$atlas.palette)
+
+# Radar plots
+plot.states.radar(ref.cd8, query = gueguen.cd3.blood, min.cells = 10, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'SLC4A10','TRAV1-2')) 
+
+# barplot
+plot.statepred.composition(ref.cd8,  gueguen.cd3.blood, metric = "Percent")  + ylim(0, 52) + theme_bw() + RotatedAxis()
+
+# FP
+FeaturePlot(gueguen.cd3.blood, features = c("TYROBP","KIR3DL2","KIR2DL3","KLRC1"), min.cutoff = "q5", order = T, ncol = 4, pt.size = 0.3, max.cutoff = "q95") &
+    scale_color_paletteer_c("pals::coolwarm") & NoLegend() & NoAxes()
+```
+
+## Mapping of [Niborski et al. 2022](https://www.nature.com/articles/s41467-022-31504-z)
+
+```{r}
+# Loading
+niborski.cd8 <- readRDS(file = '~/Dropbox/CSI/Datasets/Niborski2022/Niborski_2022_Seurat_v3.Rds')
+ref.cd8 <- readRDS(file = '~/Dropbox/CSI/Datasets/projectTils/ref_TILAtlas_mouse_v1.rds')
+
+# Remove TRM from human reference
+ref.cd8 <- subset(ref.cd8, idents = 'TRM', invert = T )
+ref.cd8.downsample <- subset(ref.cd8,  downsample = 500)
+
+# Mapping
+query.projected <- Run.ProjecTILs(niborski.cd8, skip.normalize = T, ref = ref.cd8, filter.cells = F, direct.projection = T, ncores = 1, query.assay = 'RNA')
+plot.projection(ref.cd8.downsample, query.projected)
+
+# Response to therapy
+query.list <- SplitObject(query.projected, split.by = "condition")
+pll <- list()
+pll[[1]] <- plot.projection(ref.cd8, query.list[["WT"]]) + ggtitle("WT")
+pll[[2]] <- plot.statepred.composition(ref.cd8, query.list[["WT"]],  metric = "Percent") +
+    ggtitle("WT") + ylim(0, 100)+ theme_bw()+ RotatedAxis()
+pll[[3]] <- plot.projection(ref.cd8, query.list[["WT_T"]]) + ggtitle("WT_T")
+pll[[4]] <- plot.statepred.composition(ref.cd8, query.list[["WT_T"]], metric = "Percent") +
+    ggtitle("WT_T") + ylim(0, 100) + theme_bw() + RotatedAxis()
+pll[[5]] <- plot.projection(ref.cd8,  query.list[["KO"]]) + ggtitle("KO")
+pll[[6]] <- plot.statepred.composition(ref.cd8, query.list[["KO"]], metric = "Percent") +
+    ggtitle("KO") + ylim(0, 100)+ theme_bw()+ RotatedAxis()
+pll[[7]] <- plot.projection(ref.cd8,  query.list[["KO_T"]]) + ggtitle("KO_T")
+pll[[8]] <- plot.statepred.composition(ref.cd8,  query.list[["KO_T"]], metric = "Percent") +
+    ggtitle("KO_T") + ylim(0, 100) + theme_bw() + RotatedAxis()
+grid.arrange(grobs = pll, ncol = 2, nrow = 4, widths = c(1.5, 1))
+
+# Radar plots
+plot.states.radar(ref.cd8, query = query.projected, min.cells = 10, genes4radar = c('Lef1', "Tcf7", "Ccr7", "Gzmk", "Klrg1",'Fcgr4','Zfp683','Itgae', "Crtam", "Cd200",'Gng4', "Havcr2", "Tox", "Entpd1", 'Mcm5','Top2a'))
+```
+
+## Mapping of [Bassez et al. 2021](https://pubmed.ncbi.nlm.nih.gov/33958794/)
+
+```{r}
+# setup parameters
+minCells <- 500
+ds <- 1000
+
+#
+ddir <- "input/Bassez_breast_data"
+if (!file.exists(ddir)) {
+    dir.create(ddir)
+    dataUrl <- "https://drive.switch.ch/index.php/s/7jdqnvPZuJrriZB/download"
+    download.file(dataUrl, paste0(ddir, "/tmp.zip"))
+    unzip(paste0(ddir, "/tmp.zip"), exdir = ddir)
+    file.remove(paste0(ddir, "/tmp.zip"))
+}
+# Count matrices
+f1 <- sprintf("%s/1864-counts_tcell_cohort1.rds", ddir)
+cohort1 <- readRDS(f1)
+dim(cohort1)
+
+# Metadata
+meta1 <- read.csv(sprintf("%s/1870-BIOKEY_metaData_tcells_cohort1_web.csv", ddir))
+rownames(meta1) <- meta1$Cell
+head(meta1)
+data.seurat <- CreateSeuratObject(cohort1, project = "Cohort1_IT", meta.data = meta1)
+table(data.seurat$timepoint)
+data.seurat <- subset(data.seurat, subset = timepoint == "Pre")
+data.seurat <- subset(data.seurat, subset = cellSubType %in% c("NK_REST", "Vg9Vd2_gdT",
+    "gdT", "NK_CYTO"), invert = T)
+percent.ribo.dv <- PercentageFeatureSet(data.seurat, pattern = "^RP[LS]")
+percent.mito.dv <- PercentageFeatureSet(data.seurat, pattern = "^MT-")
+data.seurat <- AddMetaData(data.seurat, metadata = percent.ribo.dv, col.name = "percent.ribo")
+data.seurat <- AddMetaData(data.seurat, metadata = percent.mito.dv, col.name = "percent.mito")
+Idents(data.seurat) <- "patient_id"
+VlnPlot(data.seurat, features = c("nFeature_RNA", "nCount_RNA", "percent.ribo", "percent.mito"),
+    ncol = 2, pt.size = 0)
+data.seurat <- subset(data.seurat, subset = nFeature_RNA > 500 & nFeature_RNA < 6000 &
+    nCount_RNA > 600 & nCount_RNA < 25000 & percent.ribo < 50 & percent.mito < 15)
+largeSamples <- names(table(data.seurat$patient_id)[table(data.seurat$patient_id) >=
+    minCells])
+data.seurat <- subset(data.seurat, idents = largeSamples)
+data.seurat <- subset(data.seurat, cells = WhichCells(data.seurat, downsample = ds))
+
+# Saving
+saveRDS(object = data.seurat, file = 'Bassez.seurat.rds')
+
+# Mapping
+models <- scGate::get_scGateDB()
+query.projected <- ProjecTILs.classifier(data.seurat, split.by =  "patient_id", ref, filter.cells = T, scGate_model = models$human$CD8_TIL$CD8_TIL_filtering, ncores = 1)
+
+# Comparing R / NR
+query.sub.byExp <- subset(query.projected, subset = expansion %in% c("E",
+    "NE"))
+query.sub.byExp <- SplitObject(query.sub.byExp, split.by = "expansion")
+
+# Radar plots
+plot.states.radar(ref, query = query.sub.byExp, min.cells = 10, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'SLC4A10','TRAV1-2')) 
+
+# Barplots
+n_e <- length(table(query.sub.byExp$E$patient_id))
+n_ne <- length(table(query.sub.byExp$NE$patient_id))
+c <- plot.statepred.composition(ref, query.sub.byExp$E, metric = "percent", cols = mycols) + ylim(0,
+    40) + ggtitle(paste0("Responders; n=", n_e)) + theme_bw()
+d <- plot.statepred.composition(ref, query.sub.byExp$NE, metric = "percent", cols = mycols) + ylim(0,
+    40) + ggtitle(paste0("Non-Responders; n=", n_ne)) + theme_bw()
+c | d
+
+# Saving
+saveRDS(object = query.projected, file = 'Bassez.projected.rds')
+```
+
+## Mapping of [Zheng et al. 2021](https://pubmed.ncbi.nlm.nih.gov/34914499/)
+
+```{r}
+# We start the analysis with seurat.list object, containing unfiltered Zheng datasets, with 321 samples
+seurat.list <- readRDS("~/Dropbox/CSI/Datasets/Zhang_TIL_Science2021/Zheng.seurat.projected.rds")
+ref.cd8 <- readRDS(file="~/Dropbox/CSI/reference_atlases/CD8TIL_human_ss_0.1.rds")
+
+# Append gueguen et al. patients
+gueguen.cd3 <- readRDS('~/Dropbox/CSI/Datasets/Gueguen2021/NSCLC_CD3_11tumors.Rds')
+gueguen.cd3$batchV <- gueguen.cd3$orig.ident
+gueguen.cd3$loc <- 'T'
+gueguen.cd3$dataset <- 'Gueguen2021'
+gueguen.cd3$cancerType <- 'LUNG'
+seurat.list <- c(seurat.list, gueguen.cd3)
+seurat.merged <- merge(seurat.list[[1]], c(seurat.list[2:length(seurat.list)]))
+seurat.merged$batchV_dataset <- paste(seurat.merged$batchV, seurat.merged$dataset, sep = '_')
+seurat.list <- SplitObject(object = seurat.merged, split.by = "batchV_dataset")
+
+# Scale and Normalize
+seurat.list <- sapply(seurat.list, function(x) {
+    x <- x %>% NormalizeData()
+    return(x)
+  },USE.NAMES = T)
+
+# Setup technology metadata
+tenX <- c("BC.Elham2018.10X","BC.Peter2018", "BC.zhangLab5P","BCC.KathrynEYost2019", "BCL.zhangLab5P","CRC.ZiyiLi10X", "ESCA.zhangLab5P","FTC.zhangLab5P","HCC.YaoHe10X", "LUNG.Diether2018",'LUNG.QianqianSong2019',"MM.zhangLab5P", 'NPC.XiliangWang2019', "OV.zhangLab5P", "PACA.zhangLab5P", "RC.MatthewDYoung2018", "NPC.XiliangWang2019", 'RC.MatthewDYoung2018' ,"RC.zhangLab5P", "SCC.KathrynEYost2019", "STAD.BoxiKang2019", "THCA.zhangLab5P", "UCEC.zhangLab5P","Gueguen2021", "LichunMa2019","JunyaPeng2019")
+SS2 <- c("CHOL.zhangLabSS2", 'CRC.zhangLabSS2', 'CC.zhangLabSS2', 'LUNG.zhangLabSS2','Melanoma.LivnatJerby-Arnon2018','Melanoma.MosheSade-Feldman2018',
+         'HNSCC.SidharthVPuram2017', 'HCC.zhangLabSS2', 'YaoHeSS2')
+Mars_seq <- c('Melanoma.HanjieLi2018')
+SeqWell <- c("AML.PeterVanGalen2019")
+Indrop <- c("BC.Elham2018.Indrop", 'LUNG.RapolasZilionis2019')
+
+for (i in names(seurat.list)) {
+  if (levels(factor(seurat.list[[i]]$dataset)) %in% tenX) {
+    seurat.list[[i]]$dataset.tech <- "10X"
+  }
+  if (levels(factor(seurat.list[[i]]$dataset)) %in% SS2) {
+    seurat.list[[i]]$dataset.tech <- "SS2"
+  }
+  if (levels(factor(seurat.list[[i]]$dataset)) %in% Mars_seq) {
+    seurat.list[[i]]$dataset.tech <- "Mars-seq"
+  }
+  if (levels(factor(seurat.list[[i]]$dataset)) %in% SeqWell) {
+    seurat.list[[i]]$dataset.tech <- "Seqwell"
+  }
+  if (levels(factor(seurat.list[[i]]$dataset)) %in% Indrop) {
+    seurat.list[[i]]$dataset.tech <- "Indrop"
+  }
+}
+
+# Fix gene names 
+EnsemblGeneFile = "aux/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz"
+for (i in names(seurat.list)){
+  print(i)
+  seurat.list[[i]] <- STACAS:::standardizeGeneSymbols(seurat.list[[i]], EnsemblGeneFile = EnsemblGeneFile)
+}
+
+# Saving
+saveRDS(seurat.list,'cache/seurat.list.all.samples.unfiltered.rds')
+seurat.list.bis <- readRDS('cache/seurat.list.all.samples.unfiltered.rds')
+
+# Removing all small objects and of class try-error (when projectils failed)
+seurat.list.size <- unlist(sapply(seurat.list,function(x) ncol(x)))
+seurat.list.cleaned <- seurat.list[which(seurat.list.size >= 50)]
+
+# Saving
+saveRDS(seurat.list.cleaned,'cache/seurat.list.all.samples.unfiltered.projected.cd8.rds')
+seurat.list.cleaned <- readRDS('cache/seurat.list.all.samples.unfiltered.projected.cd8.rds')
+
+# Running ProjecTILs
+models <- scGate::get_scGateDB()
+seurat.list <- sapply(seurat.list, function(x) {
+    try(ProjecTILs::Run.ProjecTILs(ref = ref, query = x, filter.cells = T,  scGate_model = models$human$generic$CD8_TIL_filtering, split.by = 'batchV_dataset', ndim = 30, ncores = 8, skip.normalize = T))
+}, USE.NAMES = T)
+
+# Remove all error objects (not enough cells after Projectils filtering)
+seurat.list.class <- unlist(sapply(seurat.list,function(x) class(x)))
+seurat.list.cleaned <- seurat.list[which(seurat.list.class == 'Seurat')]
+
+# Remerging everything
+seurat.merged <- merge(seurat.list.cleaned[[1]], c(seurat.list.cleaned[2:length(seurat.list)]))
+
+# Saving
+saveRDS(seurat.merged,'cache/seurat.cd8.projected.merged.rds')
+
+# Take melanoma only and split by dataset
+seurat.melanoma.dataset <- subset(x = seurat.merged, subset = cancerType == 'Melanoma')
+seurat.melanoma.dataset <- SplitObject(seurat.melanoma.dataset,split.by = 'dataset')
+
+# Are ProjecTILs annotation matching 'meta.cluster' annotation?
+x.T <- table(seurat.merged$meta.cluster[which(seurat.merged$loc=='T')], seurat.merged$functional.cluster[which(seurat.merged$loc=='T')])
+p1 <- pheatmap(mat = x.T, scale = 'row', main = 'Tumor samples',cluster_rows = F, cluster_cols = F )
+
+x.N <- table(seurat.merged$meta.cluster[which(seurat.merged$loc=='N')], seurat.merged$functional.cluster[which(seurat.merged$loc=='N')])
+p2 <- pheatmap(mat = x.N, scale = 'row', main = 'Normal samples',cluster_rows = F, cluster_cols = F )
+
+x.P <- table(seurat.merged$meta.cluster[which(seurat.merged$loc=='P')], seurat.merged$functional.cluster[which(seurat.merged$loc=='P')])
+p3 <- pheatmap(mat = x.P, scale = 'row', main = 'Peripheral Blood samples',cluster_rows = F, cluster_cols = F )
+
+x.L <- table(seurat.merged$meta.cluster[which(seurat.merged$loc=='L')], seurat.merged$functional.cluster[which(seurat.merged$loc=='L')])
+p4 <- pheatmap(mat = x.L, scale = 'row', main = 'Lymph node samples', cluster_rows = F, cluster_cols = F)
+
+# Plotting heatmaps
+plot_list=list()
+plot_list[['p1']]=p1[[4]]
+plot_list[['p2']]=p2[[4]]
+plot_list[['p3']]=p3[[4]]
+plot_list[['p4']]=p4[[4]]
+
+grid.arrange(arrangeGrob(grobs= plot_list,ncol=2, name = T))
+
+# Radar plots
+pdf(file = 'plots/zheng.radar.tissues.pdf', width = 16, height = 15)
+plot.states.radar(ref, query = seurat.tissue, min.cells = 10, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'SLC4A10','TRAV1-2'))
+dev.off()
+```
+
+### Number of cells per conditions
+
+```{r}
+# Per tissue
+seurat.tissue <- SplitObject(seurat.merged, split.by = "loc")
+ 
+pll <- c()
+for (i in names(seurat.tissue)){
+  pll[[i]] <- plot.statepred.composition(ref.cd8, query = seurat.tissue[[i]], metric = "Count")+ ggtitle(paste0("Tissue type: ", i)) + theme_bw() + RotatedAxis()
+}
+grid.arrange(grobs = pll, ncol = 4)
+
+# Per tumor type
+seurat.cancertype <- subset(seurat.merged, subset = loc == "T")
+seurat.cancertype <- SplitObject(object = seurat.cancertype, split.by = "cancerType")
+ 
+pll <- c()
+for (i in names(seurat.cancertype)){
+  pll[[i]] <- plot.statepred.composition(ref.cd8, query = seurat.cancertype[[i]], metric = "Count")+ ggtitle(paste0("Tumor type: ", i)) + theme_bw() + RotatedAxis() + NoLegend()
+}
+grid.arrange(grobs = pll, ncol = 4)
+
+# Per technology
+# Fix technology metadata
+tenX <- c("BC.Elham2018.10X","BC.Peter2018", "BC.zhangLab5P","BCC.KathrynEYost2019", "BCL.zhangLab5P","CRC.ZiyiLi10X", "ESCA.zhangLab5P","FTC.zhangLab5P","HCC.YaoHe10X", "LUNG.Diether2018",'LUNG.QianqianSong2019',"MM.zhangLab5P", 'NPC.XiliangWang2019', "OV.zhangLab5P", "PACA.zhangLab5P", "RC.MatthewDYoung2018", "NPC.XiliangWang2019", 'RC.MatthewDYoung2018' ,"RC.zhangLab5P", "SCC.KathrynEYost2019", "STAD.BoxiKang2019", "THCA.zhangLab5P", "UCEC.zhangLab5P","Gueguen2021", "LIHC.LichunMa2019","PACA.JunyaPeng2019")
+SS2 <- c("CHOL.zhangLabSS2", 'CRC.zhangLabSS2', 'CC.zhangLabSS2', 'LUNG.zhangLabSS2','Melanoma.LivnatJerby-Arnon2018','Melanoma.MosheSade-Feldman2018',
+         'HNSCC.SidharthVPuram2017', 'HCC.zhangLabSS2', 'HCC.YaoHeSS2')
+seurat.merged$dataset.tech[which(seurat.merged$dataset %in% tenX)] <- "10X"
+seurat.merged$dataset.tech[which(seurat.merged$dataset %in% SS2)] <- "SS2"
+
+# Splitting per technology
+seurat.technology <- SplitObject(object = seurat.merged, split.by = "dataset.tech")
+
+pll <- c()
+for (i in names(seurat.technology)){
+  pll[[i]] <- plot.statepred.composition(ref.cd8, query = seurat.technology[[i]], metric = "Count")+ ggtitle(paste0("Technology: ", i)) + theme_bw() + RotatedAxis() + NoLegend()
+}
+grid.arrange(grobs = pll, ncol = 5)
+
+# Per TCR class
+seurat.TCR <- seurat.merged[,!is.na(seurat.merged$TCR)]
+seurat.TCR <- SplitObject(object = seurat.TCR, split.by = "TCR")
+ 
+pll <- c()
+for (i in names(seurat.TCR)){
+  pll[[i]] <- plot.statepred.composition(ref.cd8, query = seurat.TCR[[i]], metric = "Count")+ ggtitle(paste0("TCR class: ", i)) + theme_bw() + RotatedAxis() + NoLegend()
+}
+grid.arrange(grobs = pll, ncol = 5)
+
+# Per cycling phase
+seurat.phase <- SplitObject(object = seurat.merged, split.by = "Phase")
+ 
+pll <- c()
+for (i in names(seurat.phase)){
+  pll[[i]] <- plot.statepred.composition(ref.cd8, query = seurat.phase[[i]], metric = "Count")+ ggtitle(paste0("Phase: ", i)) + theme_bw() + RotatedAxis() + NoLegend()
+}
+grid.arrange(grobs = pll, ncol = 3)
+```
+
+### Analysis per tumor type
+
+```{r}
+seurat.merged <- readRDS('cache/seurat.cd8.projected.merged.rds')
+
+# Plotting barplots functional.cluster tumor type
+seurat.cancertype <- subset(seurat.merged, subset = loc == "T")
+seurat.cancertype <- SplitObject(object = seurat.cancertype, split.by = "cancerType")
+
+pll <- c()
+for (i in names(seurat.cancertype)){
+  pll[[i]] <- plot.statepred.composition(ref, query = seurat.cancertype[[i]], metric = "percent", cols = mycols) + ylim(0, 90) + ggtitle(paste0("Tumor type: ", i)) + theme_bw() + RotatedAxis()
+}
+pdf(file = 'plots/zheng.barplots.tumor_type.pdf', width = 17, height = 17)
+grid.arrange(grobs = pll, ncol = 4)
+dev.off()
+
+# Plotting barplots original cluster annotation
+pll <- c()
+for (i in names(seurat.tissue)){
+  pll[[i]] <- plot.statepred.composition(ref, labels.col = 'meta.cluster', query = seurat.tissue[[i]], metric = "percent", cols = mycols) + ylim(0, 65) + ggtitle(paste0("Tumor type: ", i)) + theme_bw() + RotatedAxis()
+}
+pdf(file = 'plots/zheng.barplots.tissue.orig.annot.filtered.pdf', width = 22, height = 4)
+grid.arrange(grobs = pll, ncol = 4)
+dev.off()
+```
+
+### Analysis per tissue type
+
+```{r}
+seurat.merged <- readRDS('cache/seurat.cd8.projected.merged.rds')
+seurat.merged$functional.cluster <- factor(seurat.merged$functional.cluster, levels = levels(Idents(ref.cd8)))
+seurat.tissue <- SplitObject(seurat.merged, split.by = "loc")
+
+# Show prediction scores per tissue
+pll <- c()
+for (i in names(seurat.tissue)){
+  pll[[i]] <- VlnPlot(seurat.tissue[[i]], group.by = "functional.cluster", features =  "functional.cluster.conf",cols = mycols) + ggtitle(paste0("Tissue type: ", i)) + theme_bw() + RotatedAxis()
+}
+pdf(file = 'plots/zheng.violins.confidence.score.pdf', width = 17, height = 4)
+grid.arrange(grobs = pll, ncol = 4)
+dev.off()
+```
+
+### Pseudobulk with the transfered labels
+
+```{r}
+# On the RNA assay
+Idents(seurat.merged) <- paste(seurat.merged$functional.cluster, seurat.merged$batchV_dataset, seurat.merged$loc, sep = '_')
+VariableFeatures(seurat.merged) <- VariableFeatures(ref.cd8)
+Average <- AverageExpression(object = seurat.merged, assays = 'RNA',features = VariableFeatures(seurat.merged), return.seurat = T)
+Average <- ScaleData(object = Average, verbose = FALSE)
+Average <- FindVariableFeatures(obj = Average)
+Average <- RunPCA(Average, npcs = 30)
+DimPlot(Average, reduction = "pca", group.by = 'orig.ident', cols = mycols) + ggtitle("PCA bulk-like sample - RNA assay")
+
+# On the integrated assay
+Idents(seurat.merged) <- paste(seurat.merged$functional.cluster, seurat.merged$batchV_dataset, seurat.merged$loc, sep = '_')
+VariableFeatures(seurat.merged) <- VariableFeatures(ref.cd8)
+Average <- AverageExpression(object = seurat.merged, assays = 'integrated',features = rownames(seurat.merged@assays$integrated), return.seurat = T)
+Average <- ScaleData(object = Average, verbose = FALSE)
+Average <- FindVariableFeatures(obj = Average)
+Average <- RunPCA(Average, npcs = 30)
+DimPlot(Average, reduction = "pca", group.by = 'orig.ident', cols = mycols) + ggtitle("PCA bulk-like sample - integrated assay")
+
+# Compute hclust on pseudobulk samples
+pheatmap(Average)
+
+# Recompute embeddings + recompute unsupervised clustering - Can we recover Tinn clusters with unsupervised clustering? (meaning that we would have suboptimal scGate) 
+### ----> Do it without HSP / IFN / Cycling cells
+set.seed(1234)
+seurat.merged.recomputed.emb <- recalculate.embeddings(ref = ref, projected = seurat.merged, umap.method = "uwot", resol = 0.4)
+Idents(seurat.merged.recomputed.emb) <- "functional.cluster"
+
+sub <- seurat.merged.recomputed.emb
+sub$functional.cluster[sub$ref_or_query == "query"] = NA
+a <- DimPlot(sub, reduction = "umap", cols = palette, group.by = "functional.cluster") +
+    theme(aspect.ratio = 1) + theme(axis.ticks = element_blank(), axis.text = element_blank()) +
+    NoLegend() + ggtitle("Reference")
+sub <- merged
+sub$functional.cluster[sub$ref_or_query == "ref"] = NA
+b <- DimPlot(sub, reduction = "umap", cols = palette, group.by = "functional.cluster") +
+    theme(aspect.ratio = 1) + theme(axis.ticks = element_blank(), axis.text = element_blank()) +
+    ggtitle("Projected")
+c <- DimPlot(merged, group.by = "seurat_clusters", label = T) + theme(aspect.ratio = 1) +
+    theme(axis.ticks = element_blank(), axis.text = element_blank()) + ggtitle("re-clustering") +
+    NoLegend()
+d <- FeaturePlot(merged, features = "newclusters") + theme(aspect.ratio = 1) + theme(axis.ticks = element_blank(),
+    axis.text = element_blank()) + ggtitle("Query-enriched clusters")
+(a | b)/(c | d)
+```
+
+### Heatmap of DEGs / pseudobulk samples
+
+```{r}
+# Remove samples with less than 100 cells
+seurat.merged$batchV_dataset_loc_cluster <- paste(seurat.merged$batchV_dataset_loc, seurat.merged$functional.cluster, sep = "_")
+seurat.merged$batchV_dataset_cluster_loc <- paste(seurat.merged$functional.cluster, seurat.merged$batchV_dataset_loc, sep = "_")
+Idents(seurat.merged) <- seurat.merged$batchV_dataset_loc_cluster
+seurat.filtered.datasets <- which(table(seurat.merged$batchV_dataset_loc_cluster) > 100)
+seurat.filtered <- subset(seurat.merged, ident = names(seurat.filtered.datasets))
+
+# Heatmap
+`%!in%` = Negate(`%in%`)
+markers <- FindAllMarkers(object = ref.cd8, only.pos = TRUE, assay = "RNA")
+markers <- filter(markers, rownames(markers) %!in% unlist(GetSignature(SignatuR$Hs)))
+markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC) -> top10
+Average <- AverageExpression(object = seurat.filtered, return.seurat = T, assay = "RNA")
+Average <- ScaleData(object = Average, features = rownames(markers))
+
+# Reappend lost metadata
+Idents(seurat.merged) <- seurat.merged$batchV_dataset_cluster_loc
+Average <- AverageExpression(object = seurat.merged, return.seurat = T, assay = "RNA")
+tissues <- gsub("^.*_", "", colnames(Average))
+Idents(seurat.merged) <- seurat.merged$batchV_dataset_loc_cluster
+Average <- AverageExpression(object = seurat.merged, return.seurat = T, assay = "RNA")
+Average[["functional.cluster"]] <- str_extract(colnames(Average), "[^_]*$")
+Average[["Tissue"]] <- tissues
+df2 <- table(seurat.merged$batchV_dataset_loc_cluster, seurat.merged$cancerType)
+df2 <- as.matrix((df2 > 0) + 0)
+df2[df2 == 0] <- NA
+df2 <- as.data.frame(df2)
+df2$names <- rownames(df2)
+df2 <- as_tibble(df2)
+df2$names 
+df2 <- df2  %>% 
+pivot_longer(!names, values_drop_na = T, names_to = "cancerType", values_to  = "value")
+Average[["cancerType"]] <- df2$cancerType 
+
+### Plotting with scillus
+library(Scillus)
+Average$functional.cluster <- factor(x = Average$functional.cluster, levels = levels(Idents(ref.cd8)))
+Average$Tissue <- factor(x = Average$Tissue, levels = c("L","P","N","T"))
+plot_heatmap(dataset = Average, 
+              markers = top10$gene, row_font_size = 7, 
+              sort_var = c("functional.cluster","Tissue"),
+              anno_var = c("functional.cluster","cancerType","Tissue"),
+              anno_colors = list(ref.cd8@misc$atlas.palette, mycolors.cancerType, c("yellow","firebrick2","seagreen3","mediumorchid3")))
+```
+
+### Pseudobulk with the original labels
+
+If the labels are not consistent between studies, it might mean that cluster signal is not strong enough.
+
+```{r}
+Idents(seurat.merged) <- paste(seurat.merged$meta.cluster, seurat.merged$batchV_dataset, seurat.merged$loc, sep = '_')
+seurat.merged <- FindVariableFeatures(obj = seurat.merged)
+Average <- AverageExpression(object = seurat.merged, assays = 'integrated',features = rownames(seurat.merged@assays$integrated), return.seurat = T)
+Average <- ScaleData(object = Average, verbose = FALSE)
+Average <- FindVariableFeatures(obj = Average)
+Average <- RunPCA(Average, npcs = 30)
+DimPlot(Average, reduction = "pca", group.by = 'orig.ident', cols = mycols) 
+```
+
+### Van Galen dataset really have more TRM?
+
+These are bone marrow extracts from AML patients. Are the TRM displaying the same features as other TRM cells, for instance in the lung?
+
+```{r}
+van.galen <- subset(zheng.integrated, subset = dataset == "AML.PeterVanGalen2019")
+
+van.galen <- van.galen |> FindVariableFeatures.STACAS() |>
+  ScaleData() |> RunPCA(npcs=30) |> RunUMAP(dims=1:30)
+
+DimPlot(van.galen, group.by = 'functional.cluster', label = T, repel = T, cols = mycols) 
+```
+
+There is almost no TRM in the AML dataset, which make sense.
+
+### ROGUE index
+
+[ROGUE](https://www.nature.com/articles/s41467-020-16904-3) index is a **entropy-based metric for assessing the purity of single cell population.** We want to check here if Tinn have indeed lesser ROGUE indexes, which could mean that they are heterogeneous and need further clustering / characterisation. A good positive control for this tool could be MAIT cells, for which we know that we didn't characterise MAIT 1 and MAIT 17 separation for instance.
+
+```{r}
+# Rogue index boxplot per tissues / datasets
+# Low ROGUE index can indicate low quality clustering / need for subclustering / high heterogeneity if tissues are mixed
+library(ROGUE)
+seurat.list <- readRDS('cache/seurat.list.all.samples.unfiltered.rds')
+seurat.merged <- merge(seurat.list[[1]], c(seurat.list[2:length(seurat.list)]))
+
+# First we select only 10X datasets
+seurat.merged <-  subset(seurat.merged, subset = dataset.tech == "10X")
+rogue.res <- rogue(seurat.merged@assays$RNA@data, labels = seurat.merged$meta.cluster, samples = seurat.merged$batchV_dataset, platform = 'UMI')
+rogue.boxplot(rogue.res)
+```
+
+### Are remaining Tinn really Tinn?
+
+```{r}
+zheng.tinn <- subset(zheng.integrated, subset = meta.cluster == c("CD8.c08.Tk.TYROBP", "CD8.c09.Tk.KIR2DL4"))
+
+VlnPlot(zheng.tinn, pt.size = 0.1, features = c("TYROBP","CD8A","CD3D","TRAC","TRDC","IKZF2","FCGR3A","FGFBP2","KLRG1","CX3CR1"), ncol = 5, group.by = "meta.cluster")
+```
+
+### DEGs normal vs tumor
+
+```{r}
+keyvals.colour <- ifelse(
+    res$log2FoldChange < -2.5, 'royalblue',
+      ifelse(res$log2FoldChange > 2.5, 'gold',
+        'black'))
+
+library(EnhancedVolcano)
+Idents(seurat.merged) <- seurat.merged$functional.cluster
+pdf("seurat.merged.DEGs.tumor.vs.normal.pdf", width = 9, height = 9)
+for (i in levels(Idents(seurat.merged))){
+  degs <- try(FindMarkers(object = seurat.merged, ident.1 = "T", ident.2 = "N", subset.ident = i, group.by = "loc", assay = "RNA"))
+  try(plot(EnhancedVolcano(degs,
+                       lab = rownames(degs),
+                       x = 'avg_log2FC',
+                       y = 'p_val_adj', 
+                       drawConnectors = T, 
+                       pCutoff = 0.01, 
+                       FCcutoff = 0.3)+ ggtitle(paste("cluster",i, sep = " "))))
+}
+dev.off()
+```
+
+### PCA with cell-types proportions
+
+```{r}
+# Setup batchV_dataset_loc
+seurat.merged$batchV_dataset_loc <- paste(seurat.merged$batchV_dataset, seurat.merged$loc, sep = "_")
+
+# Compute proportions
+x <- prop.table(table(seurat.merged$functional.cluster, seurat.merged$batchV_dataset_loc), margin = 2)
+x <- x[,colSums(is.na(x))<nrow(x)]
+pca <-  prcomp(t(x))
+pca <- as.data.frame(pca$x)
+pca$ident <- rownames(pca)
+ggplot(pca) + geom_point(aes(x=PC1, y=PC2, colour = ident)) + theme_bw() + NoLegend()
+
+# Reappend lost metadata (loc)
+pca$Tissue <- str_sub(pca$ident, -1)
+ggplotly(ggplot(pca) + geom_point(aes(x=PC1, y=PC2, label = ident, colour = Tissue)) + theme_bw())
+
+# Reappend lost metadata (cancerType)
+meta <- table(seurat.merged$batchV_dataset_loc, seurat.merged$cancerType)
+meta <- as.matrix((meta > 0) + 0)
+meta[meta == 0] <- NA
+meta <- as.data.frame(meta)
+meta$names <- rownames(meta)
+meta <- as_tibble(meta)
+meta$names 
+meta2 <- meta  %>% 
+pivot_longer(!names, values_drop_na = T, names_to = "cancerType", values_to  = "value")
+pca$cancerType <- meta2$cancerType[which(meta2$names %in% rownames(pca))]
+ggplot(pca) + geom_point(aes(x=PC1, y=PC2, colour = cancerType)) + theme_bw() + scale_color_paletteer_d("pals::alphabet")
+
+#### Remove samples with less than 100 cells
+df <- table(seurat.merged$functional.cluster, seurat.merged$batchV_dataset_loc)
+df <- df[,which(colSums(df) > 100)]
+x <- prop.table(df, margin = 2)
+pca <-  prcomp(t(x))
+pca <- as.data.frame(pca$x)
+pca$ident <- rownames(pca)
+pca$Tissue <- str_sub(pca$ident, -1)
+df2 <- table(seurat.merged$batchV_dataset_loc, seurat.merged$cancerType)
+df2 <- df2[which(colSums(df) > 100),]
+df2 <- as.matrix((df2 > 0) + 0)
+df2[df2 == 0] <- NA
+df2 <- as.data.frame(df2)
+df2$names <- rownames(df2)
+df2 <- as_tibble(df2)
+df2$names 
+df2 <- df2  %>% 
+pivot_longer(!names, values_drop_na = T, names_to = "cancerType", values_to  = "value")
+pca$cancerType <- df2$cancerType
+
+# Plotting
+p1 <- ggplot(pca) + geom_point(aes(x=PC1, y=PC2, colour = ident)) + theme_bw() + NoLegend()
+p2 <- ggplot(pca) + geom_point(aes(x=PC1, y=PC2, colour = cancerType)) + theme_bw() + scale_color_paletteer_d("pals::alphabet")
+p3 <- ggplot(pca) + geom_point(aes(x=PC1, y=PC2, label = ident, colour = Tissue)) + theme_bw()
+p2 + p3
+
+# Plotting with plotly to get unique sample ids
+ggplotly(ggplot(pca) + geom_point(aes(x=PC1, y=PC2, label = ident, colour = Tissue)) + theme_bw())
+```
+
+### Barplots for typical examples on CA space
+
+```{r}
+ggplotly(p)
+
+# Bottom of CA space
+plot.statepred.composition(ref.cd8, query = subset(seurat.merged, subset = batchV_dataset_loc == "THCA.P20190108_THCA.zhangLab5P_T"), metric = "Percent") + ggtitle("THCA.P20190108_THCA.zhangLab5P_T") + theme_bw() + RotatedAxis() + NoLegend()
+
+# Right of CA space / Naive
+plot.statepred.composition(ref.cd8, query = subset(seurat.merged, subset = batchV_dataset_loc == "BC4_BC.Elham2018.Indrop_P"), metric = "Percent") + ggtitle("BC4_BC.Elham2018.Indrop_P") + theme_bw() + RotatedAxis() + NoLegend()
+
+# Left of CA space / TEMRA
+plot.statepred.composition(ref.cd8, query = subset(seurat.merged, subset = batchV_dataset_loc == "P0408_CRC.ZiyiLi10X_P"), metric = "Percent") + ggtitle("P0408_CRC.ZiyiLi10X_P") + theme_bw() + RotatedAxis() + NoLegend()
+
+# Middle of CA space
+plot.statepred.composition(ref.cd8, query = subset(seurat.merged, subset = batchV_dataset_loc == "PACA.P20190225_PACA.zhangLab5P_T"), metric = "Percent") + ggtitle("PACA.P20190225_PACA.zhangLab5P_T") + theme_bw() + RotatedAxis() + NoLegend()
+
+--------------------
+# Example of radar + projection for example in bottom of PCA space
+plot.states.radar(ref.cd8, query = subset(seurat.merged, subset = batchV_dataset_loc == "P0613_CRC.ZiyiLi10X_P"), min.cells = 10, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'SLC4A10','TRAV1-2')) 
+
+proj <- make.projection(subset(seurat.merged, subset = batchV_dataset_loc == "P0613_CRC.ZiyiLi10X_P"), ref = ref, filter.cells = F)
+plot.projection(ref.cd8, proj)
+
+ref <- readRDS(file="~/Dropbox/CSI/Datasets/Human_TIL_Atlas/ss.stacas.projectils.reference.rds")
+ref <- readRDS(file="~/Dropbox/CSI/Datasets/projectTils/Human_CD8_TILs_atlas.rds")
+```
+
+### Correspondence analysis of compositions
+
+```{r}
+library("FactoMineR")
+seurat.merged$batchV_dataset_loc <- paste(seurat.merged$batchV_dataset, seurat.merged$loc, sep = "_")
+seurat.merged$batchV_dataset_loc_cluster <- paste(seurat.merged$batchV_dataset_loc, seurat.merged$functional.cluster, sep = "_")
+seurat.merged$batchV_dataset_cluster_loc <- paste(seurat.merged$functional.cluster, seurat.merged$batchV_dataset_loc, sep = "_")
+
+subtype_comp_table <- prop.table(table(object.Tcell.CD8.ds$functional.cluster, object.Tcell.CD8.ds$patient), margin = 2)
+res.CA <- CA(t(subtype_comp_table))
+plot(res.CA)
+summary(res.CA)
+a <- plot(res.CA)
+b <- plot(res.CA, axes=c(1,3))
+a | b & theme(aspect.ratio = 1)
+
+# Refactor tissue
+ca.plot.df$Tissue <- gsub(x = ca.plot.df$Tissue, pattern = "T", replacement = "Tumor")
+ca.plot.df$Tissue <- gsub(x = ca.plot.df$Tissue, pattern = "P", replacement = "Peripheral.blood")
+ca.plot.df$Tissue <- gsub(x = ca.plot.df$Tissue, pattern = "N", replacement = "Normal")
+ca.plot.df$Tissue <- gsub(x = ca.plot.df$Tissue, pattern = "L", replacement = "Lymph.node")
+
+# Plotting
+p <- ggplot(ca.plot.df, aes(x = Dim1, y = Dim2,
+                       col = Tissue, shape = Variable,
+                       label = Label)) +
+  geom_vline(xintercept = 0, lty = "dashed", alpha = .5) +
+  geom_hline(yintercept = 0, lty = "dashed", alpha = .5) +
+  geom_point() + theme_bw() +
+  geom_label_repel(data=subset(ca.plot.df, Label %in% c("CM","EM","MAIT","Naive","TEMRA","TEX","TPEX","TRM")), show.legend = F) + scale_color_manual(values = c("black","gold","seagreen3","firebrick2","mediumorchid3"))
+
+p <- p +
+  labs(x = paste0("Dimension 1 (", signif(dim.var.percs[1], 3), "%)"),
+       y = paste0("Dimension 2 (", signif(dim.var.percs[2], 3), "%)"),
+       col = "", shape = "")
+plot(p)
+
+# Color per cancer type
+ca.plot.df$cancerType <- ca.plot.df$Variable
+ca.plot.df$cancerType[1:259] <- pca$cancerType
+
+p <- ggplot(ca.plot.df |> filter(cancerType == "AML" | cancerType == "Cell.type"), aes(x = Dim1, y = Dim2,
+                       col = cancerType, shape = Variable,
+                       label = Label)) +
+  geom_vline(xintercept = 0, lty = "dashed", alpha = .5) +
+  geom_hline(yintercept = 0, lty = "dashed", alpha = .5) +
+  geom_point(mapping = aes(size = 4)) + theme_bw() +
+  xlim(-1.5, 2) + ylim(-1.5, 1.5) +
+  geom_label_repel(data=subset(ca.plot.df, Label %in% c("CM","EM","MAIT","Naive","TEMRA","TEX","TPEX","TRM")),
+    fontface = 'bold', color = 'black', show.legend = F) + scale_color_manual(values = c(mycolors.cancerType, Cell.type = "black")) + ggtitle("AML samples")
+
+p <- p +
+  labs(x = paste0("Dimension 1 (", signif(dim.var.percs[1], 3), "%)"),
+       y = paste0("Dimension 2 (", signif(dim.var.percs[2], 3), "%)"),
+       col = "", shape = "")
+plot(p) + NoLegend()
+
+# Contributions of rows to dimension 1
+fviz_contrib(res.ca, choice = "col", axes = 1, top = 10)
+# Contributions of rows to dimension 2
+fviz_contrib(res.ca, choice = "col", axes = 2, top = 10)
+
+# Select only tumor samples
+p <- ggplot(ca.plot.df |> filter(cancerType == "Melanoma" & Tissue == "Tumor" | cancerType == "Cell.type" ), aes(x = Dim1, y = Dim2,
+                       col = cancerType, shape = Variable,
+                       label = Label)) +
+  geom_vline(xintercept = 0, lty = "dashed", alpha = .5) +
+  geom_hline(yintercept = 0, lty = "dashed", alpha = .5) +
+  geom_point(mapping = aes(size = 4)) + theme_bw() +
+  xlim(-1.5, 2) + ylim(-1.5, 1.5) +
+  geom_label_repel(data=subset(ca.plot.df, Label %in% c("CM","EM","MAIT","Naive","TEMRA","TEX","TPEX","TRM")),
+    fontface = 'bold', color = 'black', show.legend = F) + scale_color_manual(values = c(mycolors.cancerType, Cell.type = "black")) + ggtitle("AML samples")
+
+p <- p +
+  labs(x = paste0("Dimension 1 (", signif(dim.var.percs[1], 3), "%)"),
+       y = paste0("Dimension 2 (", signif(dim.var.percs[2], 3), "%)"),
+       col = "", shape = "")
+p + NoLegend()
+```
+
+### Hierarchical clustering of compositions
+
+```{r}
+x <- prop.table(table(seurat.merged$functional.cluster, seurat.merged$batchV_dataset_loc), margin = 2)
+
+# Reappend lost metadata from previous pca 
+meta <- pca[,c("Tissue","cancerType")]
+
+# Setting up colors cancerType
+newCols.cancerType <- colorRampPalette(pals::alphabet(length(unique(meta$cancerType))))
+mycolors.cancerType <- newCols.cancerType(length(unique(meta$cancerType)))
+names(mycolors.cancerType) <- unique(meta$cancerType)
+
+# Setting up colors Tissue
+newCols.Tissue <- colorRampPalette(pals::glasbey(length(unique(meta$Tissue))))
+mycolors.tissue <- newCols.Tissue(length(unique(meta$Tissue)))
+names(mycolors.tissue) <- unique(meta$Tissue)
+mycolors <- list(cancerType = mycolors.cancerType, Tissue = mycolors.tissue)
+
+# Plotting
+pheatmap(x, scale = "none", annotation_col = meta, show_colnames = F, cutree_cols = 6, annotation_colors = mycolors)
+```
+
+### PCA of averaged samples (gene expressions)
+
+```{r}
+# PCA of averaged profiles
+Idents(seurat.merged) <- paste(seurat.merged$functional.cluster, seurat.merged$batchV_dataset, seurat.merged$loc, sep = "_")
+avg <- AverageExpression(seurat.merged, return.seurat = T)
+
+# Reappend lost metadata
+avg[["Tissue"]] <- str_sub(colnames(avg), -1)
+seurat.merged$batchV_dataset_loc_cluster <- paste(seurat.merged$batchV_dataset_loc, seurat.merged$functional.cluster, sep = "_")
+df2 <- table(seurat.merged$batchV_dataset_loc_cluster, seurat.merged$cancerType)
+df2 <- as.matrix((df2 > 0) + 0)
+df2[df2 == 0] <- NA
+df2 <- as.data.frame(df2)
+df2$names <- rownames(df2)
+df2 <- as_tibble(df2)
+df2$names 
+df2 <- df2  %>% 
+pivot_longer(!names, values_drop_na = T, names_to = "cancerType", values_to  = "value")
+avg[["cancerType"]] <- df2$cancerType 
+
+# Technology
+df2 <- table(seurat.merged$batchV_dataset_loc_cluster, seurat.merged$dataset.tech)
+df2 <- as.matrix((df2 > 0) + 0)
+df2[df2 == 0] <- NA
+df2 <- as.data.frame(df2)
+df2$names <- rownames(df2)
+df2 <- as_tibble(df2)
+df2$names 
+df2 <- df2  %>% 
+pivot_longer(!names, values_drop_na = T, names_to = "dataset.tech", values_to  = "value")
+avg[["dataset.tech"]] <- df2$dataset.tech  
+  
+# Computing PCA
+VariableFeatures(avg) <- VariableFeatures(ref.cd8)
+avg <- RunPCA(object = avg, npcs=20)
+avg <- RunUMAP(object = avg, dims = 1:5)
+
+# Plot original clusters
+DimPlot(avg, reduction = "pca", group.by = "orig.ident", cols = ref.cd8@misc$atlas.palette) + ggtitle("PCA of averaged samples")
+DimPlot(avg, reduction = "pca", group.by = "orig.ident", split.by = "orig.ident", cols = ref.cd8@misc$atlas.palette) + ggtitle("PCA of averaged samples")
+
+# Plot tissues
+DimPlot(avg, reduction = "umap", group.by = "Tissue") + ggtitle("UMAP of averaged samples - 5 PCs")
+
+# Plot tumor types
+DimPlot(avg, reduction = "umap", group.by = "cancerType", cols = unname(pals::alphabet())) + ggtitle("UMAP of averaged samples - 5 PCs")
+
+# Plot technology
+DimPlot(subset(avg, subset = dataset.tech %in% c("10X","Indrop","Mars-seq","Seqwell","SS2")), reduction = "umap", group.by = "dataset.tech", label = T) + ggtitle("UMAP of averaged samples - 5 PCs")
+```
+
+### Subtypes correlations
+
+```{r}
+##### In total
+freq_table <- as.data.frame(prop.table(
+  x = table(seurat.merged$functional.cluster, seurat.merged$batchV_dataset_loc),
+  margin = 2
+))
+freq_table <- dcast(freq_table, Var1 ~ Var2)
+rownames(freq_table) <- freq_table$Var1
+tmp <- rownames(freq_table)
+freq_table <- freq_table[, -1]
+freq_table <- as.matrix(freq_table)
+clusters_correlations <- cor(t(freq_table))
+pheatmap(clusters_correlations, scale = "none", fontsize = 12, main = "Clusters correlations - total")
+
+##### Split per tissues
+# Tumor
+seurat.merged.sub <- subset(seurat.merged, subset = loc == "T")
+freq_table <- as.data.frame(prop.table(
+x = table(seurat.merged.sub$functional.cluster, seurat.merged.sub$batchV_dataset),
+  margin = 2
+))
+freq_table <- dcast(freq_table, Var1 ~ Var2)
+rownames(freq_table) <- freq_table$Var1
+tmp <- rownames(freq_table)
+freq_table <- freq_table[, -1]
+freq_table <- as.matrix(freq_table)
+clusters_correlations <- cor(t(freq_table))
+pheatmap(clusters_correlations, scale = "none", fontsize = 12, main = "Clusters correlations - Tumor")
+
+# Normal
+seurat.merged.sub <- subset(seurat.merged, subset = loc == "N")
+freq_table <- as.data.frame(prop.table(
+x = table(seurat.merged.sub$functional.cluster, seurat.merged.sub$batchV_dataset),
+  margin = 2
+))
+freq_table <- dcast(freq_table, Var1 ~ Var2)
+rownames(freq_table) <- freq_table$Var1
+tmp <- rownames(freq_table)
+freq_table <- freq_table[, -1]
+freq_table <- as.matrix(freq_table)
+clusters_correlations <- cor(t(freq_table))
+pheatmap(clusters_correlations, scale = "none", fontsize = 12, main = "Clusters correlations - Adjacent / normal")
+
+# Blood
+seurat.merged.sub <- subset(seurat.merged, subset = loc == "P")
+freq_table <- as.data.frame(prop.table(
+x = table(seurat.merged.sub$functional.cluster, seurat.merged.sub$batchV_dataset),
+  margin = 2
+))
+freq_table <- dcast(freq_table, Var1 ~ Var2)
+rownames(freq_table) <- freq_table$Var1
+tmp <- rownames(freq_table)
+freq_table <- freq_table[, -1]
+freq_table <- as.matrix(freq_table)
+clusters_correlations <- cor(t(freq_table))
+pheatmap(clusters_correlations, scale = "none", fontsize = 12, main = "Clusters correlations - Blood")
+```
+
+### Levels of cycling / IFN / HSP / Mito / TRM
+
+```{r}
+library(scales)
+library(cowplot)
+library(SignatuR)
+Exhaustion <- readLines("~/Google Drive/Mon Drive/Postdoc Lausanne/Signatures/Signatures_Michael_CART/Dysfunction-Exhaustion_210819.txt")
+Stemness.memory <- readLines("~/Google Drive/Mon Drive/Postdoc Lausanne/Signatures/Signatures_Michael_CART/Stemness-Memory_210819.txt")
+Cytotoxic.effectors <- readLines("~/Google Drive/Mon Drive/Postdoc Lausanne/Signatures/Signatures_Michael_CART/Cytotoxic-Effector_210819.txt")
+
+signatures <- list(GetSignature(SignatuR$Hs$Programs$cellCycle.G1S), GetSignature(SignatuR$Hs$Programs$cellCycle.G2M), c("ISG15","IFI6","IFI44L","MX1"), c("HSPA1A","HSPA1B"), GetSignature(SignatuR$Hs$Compartments$Mito),c("ZNF683","ITGAE","CXCR6"), Exhaustion, Stemness.memory, Cytotoxic.effectors)
+names(signatures) <- c("Cycling.G1S","Cycling.G2M","IFN","HSP","Mito","TRM","Exhaustion","Stemness.memory","Cytotoxic.effectors")
+
+seurat.merged <- AddModuleScore_UCell(seurat.merged, features = signatures, assay = "RNA", ncores = 4)
+
+# Plotting expression levels as barplots
+data <- seurat.merged@meta.data
+
+# Per cancerType
+pll <- lapply(names(signatures), function(x){
+  y <- paste0(x, "_UCell")
+ggplot(data = data, aes_string(x = "cancerType", y = paste0(x, "_UCell"),
+        fill = "cancerType")) + geom_boxplot() + theme_cowplot() + scale_fill_manual(values = mycolors.cancerType) +  
+        NoLegend() + RotatedAxis()
+  })
+wrap_plots(pll)
+
+# Per cancerType / ordered by median expression
+pll <- lapply(names(signatures), function(x){
+  y <- paste0(x, "_UCell")
+data |> mutate(cancerType=fct_reorder(cancerType, get(y))) |> ggplot(aes_string(x = "cancerType", y = paste0(x, "_UCell"),
+        fill = "cancerType")) + geom_boxplot() + theme_cowplot() + scale_fill_manual(values = mycolors.cancerType) +  
+        NoLegend() + RotatedAxis()
+  })
+wrap_plots(pll)
+
+# Per functional.cluster
+pll <- lapply(names(signatures), function(x){
+ggplot(data = data, aes_string(x = "functional.cluster", y = paste0(x, "_UCell"),
+        fill = "functional.cluster")) + geom_boxplot() + theme_cowplot() + scale_fill_manual(values = ref.cd8@misc$atlas.palette) +  
+        NoLegend() + RotatedAxis()
+  })
+wrap_plots(pll)
+
+# Per tissue
+pll <- lapply(names(signatures), function(x){
+ggplot(data = data, aes_string(x = "loc", y = paste0(x, "_UCell"),
+        fill = "loc")) + geom_boxplot() + theme_cowplot() + scale_fill_manual(values = mycolors.tissue) +  
+        NoLegend() + RotatedAxis()
+  })
+wrap_plots(pll)
+```
+
+### Categories of cycling / IFN / HSP
+
+```{r}
+# Show as discrete categories instead (by defining a threshold on the UCell scores)
+# Here we will use the same threshold as to construct the original map
+# cellCycle.G1S < 0.1, cellCycle.G2M < 0.1, IFN < 0.25, HSP < 0.25
+
+# Plotting
+# Per cancerType / ordered by median expression
+pll <- list()
+for (x in names(signatures)){
+  seurat.merged[[paste0(x, ".class")]] <- NA
+  seurat.merged[[paste0(x, ".class")]][,1][which(seurat.merged[[paste0(x, "_UCell")]] > 0.2)] <- "Positive"
+  seurat.merged[[paste0(x, ".class")]][,1][which(seurat.merged[[paste0(x, "_UCell")]] <= 0.2)] <- "Negative"
+  data <- prop.table(table(seurat.merged[[paste0(x, ".class")]][,1], seurat.merged$cancerType), margin = 2)
+  data <- as.data.frame(data)
+colnames(data) <- c("Class","cancerType","Frequency")
+  levels.order <- data |> group_by(cancerType) |> filter(Class == "Negative") |> arrange(-Frequency) |> select(cancerType)
+  data$cancerType <- factor(x = data$cancerType, levels = levels.order$cancerType)
+pll[[x]] <- plot(data |> ggplot(aes_string(x = "cancerType", y = "Frequency",
+        fill = "Class")) + geom_bar(position="fill", stat="identity") + scale_fill_manual(values = c("grey","firebrick2")) + theme_cowplot() + RotatedAxis() + ggtitle(paste("Frequencies for signature", x)))
+}
+wrap_plots(pll, guides = "collect")
+
+# Per functional.cluster
+pll <- list()
+for (x in names(signatures)){
+  seurat.merged[[paste0(x, ".class")]] <- NA
+  seurat.merged[[paste0(x, ".class")]][,1][which(seurat.merged[[paste0(x, "_UCell")]] > 0.2)] <- "Positive"
+  seurat.merged[[paste0(x, ".class")]][,1][which(seurat.merged[[paste0(x, "_UCell")]] <= 0.2)] <- "Negative"
+  data <- prop.table(table(seurat.merged[[paste0(x, ".class")]][,1], seurat.merged$functional.cluster), margin = 2)
+  data <- as.data.frame(data)
+colnames(data) <- c("Class","functional.cluster","Frequency")
+  levels.order <- data |> group_by(functional.cluster) |> filter(Class == "Negative") |> arrange(-Frequency) |> select(functional.cluster)
+  data$functional.cluster <- factor(x = data$functional.cluster, levels = levels.order$functional.cluster)
+pll[[x]] <- plot(data |> ggplot(aes_string(x = "functional.cluster", y = "Frequency",
+        fill = "Class")) + geom_bar(position="fill", stat="identity") + scale_fill_manual(values = c("grey","firebrick2")) + theme_cowplot() + RotatedAxis() + ggtitle(paste("Frequencies for signature", x)))
+}
+wrap_plots(pll, guides = "collect")
+
+# Per tissue
+pll <- list()
+for (x in names(signatures)){
+  seurat.merged[[paste0(x, ".class")]] <- NA
+  seurat.merged[[paste0(x, ".class")]][,1][which(seurat.merged[[paste0(x, "_UCell")]] > 0.2)] <- "Positive"
+  seurat.merged[[paste0(x, ".class")]][,1][which(seurat.merged[[paste0(x, "_UCell")]] <= 0.2)] <- "Negative"
+  data <- prop.table(table(seurat.merged[[paste0(x, ".class")]][,1], seurat.merged$loc), margin = 2)
+  data <- as.data.frame(data)
+colnames(data) <- c("Class","Tissue","Frequency")
+  levels.order <- data |> group_by(Tissue) |> filter(Class == "Negative") |> arrange(-Frequency) |> select(Tissue)
+  data$Tissue <- factor(x = data$Tissue, levels = levels.order$Tissue)
+pll[[x]] <- plot(data |> ggplot(aes_string(x = "Tissue", y = "Frequency",
+        fill = "Class")) + geom_bar(position="fill", stat="identity") + scale_fill_manual(values = c("grey","firebrick2")) + theme_cowplot() + RotatedAxis() + ggtitle(paste("Frequencies for signature", x)))
+}
+wrap_plots(pll, guides = "collect")
+```
+
+### Test mapping only Blood samples
+
+```{r}
+download.file(url = "https://www.dropbox.com/s/phqmqlp30xgnlwn/Human_CD8_TILs_atlas.rds?dl=1",
+    destfile = "Human_CD8_TILs_atlas.rds")
+ref <- load.reference.map(ref = "Human_CD8_TILs_atlas.rds")
+
+# Load Zheng
+seurat.merged <- readRDS('cache/seurat.cd8.projected.merged.rds')
+
+# Plotting barplots functional.cluster tumor type
+seurat.cancertype <- subset(seurat.merged, subset = loc == "P")
+seurat.cancertype <- SplitObject(object = seurat.cancertype, split.by = "cancerType")
+
+pll <- c()
+for (i in names(seurat.cancertype)){
+  pll[[i]] <- plot.statepred.composition(ref, query = seurat.cancertype[[i]], metric = "percent", cols = mycols) + ylim(0, 90) + ggtitle(paste0("Tumor type: ", i)) + theme_bw() + RotatedAxis()
+}
+pdf(file = 'plots/zheng.barplots.tumor_type.pdf', width = 17, height = 17)
+grid.arrange(grobs = pll, ncol = 4)
+dev.off()
+```
+
+## Mapping of [Yost et al. 2019](https://pubmed.ncbi.nlm.nih.gov/31359002/)
+
+The original annotation from this study seemed not ideal. Let's check our initial hypotheses.
+
+```{r}
+# Load data
+cached.object <- "Yost.seurat.rds"
+if (!file.exists(cached.object)) {
+    library(GEOquery)
+    geo_acc <- "GSE123813"
+    datadir <- "input/Yost"
+    gse <- getGEO(geo_acc)
+    series <- paste0(geo_acc, "_series_matrix.txt.gz")
+    system(paste0("mkdir -p ", datadir))
+    getGEOSuppFiles(geo_acc, baseDir = datadir)
+    ## Load expression matrix and metadata
+    exp.mat <- read.delim(sprintf("%s/%s/GSE123813_bcc_scRNA_counts.txt.gz",
+        datadir, geo_acc), header = F, sep = "\t")
+    genes <- exp.mat[c(-1), 1]
+    cells <- as.vector(as.character(exp.mat[1,]))
+    cells <- cells[1:53030]
+    exp.mat.filt <- exp.mat[c(-1), 2:dim(exp.mat)[2]]
+    colnames(exp.mat.filt) <- cells
+    rownames(exp.mat.filt) <- genes
+    meta <- read.delim(sprintf("%s/%s/GSE123813_bcc_tcell_metadata.txt.gz",
+        datadir, geo_acc), header = T, sep = "\t", row.names = 1)
+
+    ## Create Seurat object and add meta data
+    query.object <- CreateSeuratObject(counts = exp.mat.filt, project = "Yost",
+        min.cells = 10)
+    rm(exp.mat)
+    query.object <- AddMetaData(query.object, metadata = meta)
+    saveRDS(query.object, file = cached.object)
+} else {
+    query.object <- readRDS(cached.object)
+}
+
+# Normalize data
+query.object <- NormalizeData(query.object)
+query.object <- ScaleData(query.object)
+
+# Setting up original UMAP space
+query.object@reductions[["umap"]] <- CreateDimReducObject(embeddings = cbind(query.object$UMAP1, query.object$UMAP2), key = "UMAP_", assay = DefaultAssay(query.object))
+DimPlot(query.object, reduction = 'umap') + NoLegend()
+DimPlot(query.object, reduction = 'umap', group.by = 'treatment') +NoLegend()
+DimPlot(query.object, reduction = 'umap', group.by = 'cluster', label = T)
+
+# Filter cells without patient ID to match paper annotation
+query.object.filtered <- query.object[,which(!is.na(query.object$patient))]
+
+# Mapping
+models <- scGate::get_scGateDB()
+query.projected <- Run.ProjecTILs(query.object.filtered, split.by =  "patient", ref.cd8, filter.cells = T, ncores = 8)
+DimPlot(query.projected, reduction = 'umap', label = T, group.by = 'functional.cluster')
+
+# Comparing pre / post treatment
+query.sub.byTT <- subset(query.projected, subset = treatment %in% c("pre",
+    "post"))
+query.sub.byTT <- SplitObject(query.sub.byTT, split.by = "treatment")
+
+# Radar plots
+plot.states.radar(ref.cd8, query = query.sub.byTT, min.cells = 10, genes4radar = c('LEF1', "TCF7","ACTN1", "CCR7","SESN3","GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'SLC4A10','TRAV1-2')) 
+
+# Barplots
+n_pre <- length(table(query.sub.byTT$pre$patient))
+n_post <- length(table(query.sub.byTT$post$patient))
+c <- plot.statepred.composition(ref.cd8, query.sub.byTT$pre, metric = "percent", cols = mycols) + ylim(0,
+    55) + ggtitle(paste0("Pre treatment; n=", n_pre)) + theme_bw()
+d <- plot.statepred.composition(ref.cd8, query.sub.byTT$post, metric = "percent", cols = mycols) + ylim(0,
+    55) + ggtitle(paste0("Post-treatment; n=", n_post)) + theme_bw()
+c | d
+
+# We can now isolate Tpex. Let's check DEGs between pre and post treatment
+Idents(query.projected) <- paste(query.projected$functional.cluster, query.projected$treatment, sep = '_')
+x <- FindMarkers(object = query.projected, ident.1 = 'TPEX_pre', ident.2 = 'TPEX_post', assay = 'RNA', only.pos = F)
+
+# Plotting volcano of DEGs
+EnhancedVolcano(x,
+                     lab = rownames(x),
+                     x = 'avg_log2FC',
+                     y = 'p_val_adj', 
+                     drawConnectors = T,  title = 'TPEX pre vs TPEX post',
+                     pCutoff = 0.05,
+                     FCcutoff = 0.2, labSize = 4, xlim = c(-2.5,2.5))
+
+#### Selection of Su008.Post sample, which is the majority of the "activated" cluster
+Su008.Post <- subset(query.object, subset = patient == "su008" & treatment == "post")
+
+# Mapping
+query.projected <- ProjecTILs.classifier(Su008.Post, ref.cd8, filter.cells = T, ncores = 1, skip.normalize = F)
+DimPlot(query.projected, reduction = 'umap', label = T, repel = T, group.by = 'functional.cluster', cols = ref.cd8@misc$atlas.palette)
+
+# Plot projection
+plot.projection(ref = ref.cd8, query = query.projected)
+
+# Plot barplots
+plot.statepred.composition(ref = ref.cd8, query.projected, metric = "percent") + ylim(0,
+    55) + theme_bw()
+
+# Radar plots
+plot.states.radar(ref, query = query.projected, min.cells = 10, genes4radar = c("TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "XCL1",'GNG4', "HAVCR2", "TOX", "ENTPD1","SLC4A10","JUN","FOS", "FOSB")) 
+
+# Featureplots
+FeaturePlot(query.projected, features = c("TCF7","IL7R", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "XCL1",'GNG4', "HAVCR2", "ENTPD1","FOS","FOSB"), min.cutoff = "q5", order = T, ncol = 4, pt.size = 0.3, max.cutoff = "q95") &
+    scale_color_paletteer_c("pals::coolwarm") & NoLegend() & NoAxes()
+
+# Violins
+VlnPlot(query.projected, features = c("CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'SLC4A10','TRAV1-2',"JUN","FOS","FOSB","CD69", group.by = "functional.cluster"))
+
+# Select cells manually
+plot <- DimPlot(object = query.projected)
+cells.located <- CellSelector(plot = plot)
+query.projected.sub <- subset(query.projected, cells = cells.located)
+
+# Recheck Featureplots
+FeaturePlot(query.projected.sub, features = c("TCF7","IL7R", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "XCL1",'GNG4', "HAVCR2", "ENTPD1","JUN","FOS","FOSB"), min.cutoff = "q5", order = T, ncol = 4, pt.size = 0.3, max.cutoff = "q95") &
+    scale_color_paletteer_c("pals::coolwarm") & NoLegend() & NoAxes()
+
+# DimPlot
+DimPlot(query.projected.sub, reduction = 'umap', label = T, repel = T, group.by = 'functional.cluster', cols = ref.cd8@misc$atlas.palette)
+```
+
+## Mapping of [Caushi et al. 2021](https://www.nature.com/articles/s41586-021-03752-4)
+
+This dataset is really rich, in number of cells, and because it has tumor-specificity information.
+
+```{r}
+# Load data
+cached.object <- "Caushi.seurat.rds"
+if (!file.exists(cached.object)) {
+    library(GEOquery)
+    geo_acc <- "GSE176021"
+    datadir <- "input/Caushi"
+    gse <- getGEO(geo_acc)
+    series <- paste0(geo_acc, "_series_matrix.txt.gz")
+    system(paste0("mkdir -p ", datadir))
+    #getGEOSuppFiles(geo_acc, baseDir = datadir)
+    ## Load expression matrix and metadata
+    exp.mat <- read.delim(sprintf("%s/%s/GSE123813_bcc_scRNA_counts.txt.gz",
+        datadir, geo_acc), header = F, sep = "\t")
+    genes <- exp.mat[c(-1, -2), 1]
+    cells <- as.vector(t(exp.mat[1, 1:dim(exp.mat)[2]]))
+    exp.mat <- exp.mat[c(-1), 1:dim(exp.mat)[2]]
+    colnames(exp.mat) <- cells
+    rownames(exp.mat) <- genes
+    meta <- read.delim(sprintf("%s/%s/GSE123813_bcc_tcell_metadata.txt.gz",
+        datadir, geo_acc), header = T, sep = "\t")
+    treatment <- factor(meta$treatment)
+    cluster <- factor(meta$cluster)
+    patient <- factor(meta$patient)
+    UMAP_1 <- factor(meta$UMAP1)
+    UMAP_2 <- factor(meta$UMAP2)
+
+    ## Create Seurat object and add meta data
+    query.object <- CreateSeuratObject(counts = exp.mat, project = "SadeFeldman",
+        min.cells = 10)
+    rm(exp.mat)
+    query.object@meta.data$treatment <- treatment
+    query.object@meta.data$cluster <- cluster
+    query.object@meta.data$patient <- patient
+    query.object@meta.data$UMAP_1 <- UMAP_1
+    query.object@meta.data$UMAP_2 <- UMAP_2
+    saveRDS(query.object, file = cached.object)
+} else {
+    query.object <- readRDS(cached.object)
+}
+```
+
+## Mapping of CAR datasets - unpublished
+
+Data are split between CD4 and CD8, have 2 timepoints (D8 and D28 after injection), and have 2 conditions (Mock or SUV39H1-KO).
+
+```{r}
+# CD8 ------------------------------------
+ref.cd8 <- readRDS(file="~/Dropbox/CSI/Datasets/projectTils/Human_CD8_TILs_atlas.rds")
+
+load(file="~/Dropbox/CSI/Datasets/CAR_T_SUV39H1/SUV39H1_CAR_T_integrated_premerged_CD8s_cleaned.Rdata")
+car.cd8 <- suv.car.t.integrated.merged.timepoints.premerged.cd8s.cleaned
+rm(suv.car.t.integrated.merged.timepoints.premerged.cd8s.cleaned)
+
+# Project CD8s
+car.cd8 <- Run.ProjecTILs(car.cd8, ref = ref.cd8, filter.cells = T, skip.normalize = T, ncores = 4)
+table(car.cd8$functional.cluster)
+DimPlot(car.cd8, group.by = 'functional.cluster', cols = ref.cd8@misc$palette, label = T, order = T)
+
+# Radar plots CD8
+car.cd8.list <- SplitObject(car.cd8, split.by = "genotype_timepoint")
+plot.states.radar(ref.cd8, query = car.cd8.list, min.cells = 5, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'SLC4A10','TRAV1-2'))
+
+# Barplot CD8
+pll <- list()
+pll[[1]] <- plot.statepred.composition(ref.cd8, query.list[["Responder"]], metric = "Percent") +
+    ggtitle("D8 Mock") + ylim(0, 52)+ theme_bw()+ RotatedAxis()
+pll[[2]] <- plot.statepred.composition(ref.cd8, query.list[["Non-responder"]], metric = "Percent") +
+    ggtitle("D8 KO") + ylim(0, 52) + theme_bw() + RotatedAxis()
+pll[[3]] <- plot.statepred.composition(ref.cd8, query.list[["Responder"]],  metric = "Percent") +
+    ggtitle("D28 Mock") + ylim(0, 52)+ theme_bw()+ RotatedAxis()
+pll[[4]] <- plot.statepred.composition(ref.cd8,  query.list[["Non-responder"]], metric = "Percent") +
+    ggtitle("D28 KO") + ylim(0, 52) + theme_bw() + RotatedAxis()
+grid.arrange(grobs = pll, ncol = 2, nrow = 2, widths = c(1.5, 1))
+
+
+# CD4 ------------------------------------
+ref.cd4 <- readRDS(file="~/Dropbox/CSI/Datasets/projectTils/Human_CD4_TILs_atlas.rds")
+
+load(file="~/Dropbox/CSI/Datasets/CAR_T_SUV39H1/SUV39H1_CAR_T_integrated_premerged_CD4s_cleaned.Rdata")
+car.cd4 <- suv.car.t.integrated.merged.timepoints.premerged.cd4s.cleaned
+rm(suv.car.t.integrated.merged.timepoints.premerged.cd4s.cleaned)
+
+# Project CD4s
+car.cd4 <- ProjecTILs.classifier(car.cd4, ref = ref.cd4, filter.cells = T, ncores = 1)
+table(car.cd4$functional.cluster)
+DimPlot(car.cd4, group.by = 'functional.cluster', cols = pals::glasbey(), label = T, order = T)
+
+# Radar plots CD4
+car.cd4.list <- SplitObject(car.cd4, split.by = "genotype_timepoint")
+plot.states.radar(ref.cd4, query = car.cd4.list, min.cells = 5, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'SLC4A10','TRAV1-2')) 
+
+# Barplot CD4
+pll <- list()
+pll[[1]] <- plot.statepred.composition(ref.cd4, query.list[["Responder"]], metric = "Percent") +
+    ggtitle("D8 Mock") + ylim(0, 52)+ theme_bw()+ RotatedAxis()
+pll[[2]] <- plot.statepred.composition(ref.cd4,  query.list[["Non-responder"]], metric = "Percent") +
+    ggtitle("D8 KO") + ylim(0, 52) + theme_bw() + RotatedAxis()
+pll[[3]] <- plot.statepred.composition(ref.cd4, query.list[["Responder"]],  metric = "Percent") +
+    ggtitle("D28 Mock") + ylim(0, 52)+ theme_bw()+ RotatedAxis()
+pll[[4]] <- plot.statepred.composition(ref.cd4, query.list[["Non-responder"]], metric = "Percent") +
+    ggtitle("D28 KO") + ylim(0, 52) + theme_bw() + RotatedAxis()
+grid.arrange(grobs = pll, ncol = 2, nrow = 2, widths = c(1.5, 1))
+```
+
+## Mapping [Bigot et al. 2021](https://aacrjournals.org/cancerdiscovery/article/11/8/1938/666209/Splicing-Patterns-in-SF3B1-Mutated-Uveal-Melanoma)
+
+Dataset are tumor specific cells from blood coming from patients with Uveal Melanoma. We report TRM cells coming from the blood, which can seem counter-intuitive. Do we recapitulate this results with reference-based mapping?
+
+```{r}
+ref.cd8 <- readRDS(file="~/Dropbox/CSI/Datasets/projectTils/Human_CD8_TILs_atlas.rds")
+base::load("~/Dropbox/CSI/Datasets/Bigot2021/UM1.Rds")
+base::load("~/Dropbox/CSI/Datasets/Bigot2021/UM2_3.Rds")
+
+# UM1
+UM1 <- Run.ProjecTILs(UM1, ref = ref.cd8, filter.cells = T, ncores = 4)
+table(UM1$functional.cluster)
+DimPlot(UM1, group.by = 'functional.cluster', cols = ref.cd8@misc$atlas.palette, label = T, order = T)
+
+# UM2 and 3
+UM2_3 <- Run.ProjecTILs(UM2_3, ref = ref.cd8, filter.cells = T, ncores = 4)
+table(UM2_3$functional.cluster)
+DimPlot(UM2_3, group.by = 'functional.cluster', cols = ref.cd8@misc$atlas.palette, label = T, order = T)
+
+# Radars UM1
+plot.states.radar(ref.cd8, query = UM1, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'SLC4A10','TRAV1-2'))
+
+# Radars UM2_3
+plot.states.radar(ref.cd8, query = UM2_3,  min.cells = 5, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'SLC4A10','TRAV1-2'))
+```
+
+### Same but without TRM in the reference
+
+```{r}
+ref.cd8.noTRM <- subset(ref.cd8, idents = "TRM", invert = T)
+
+# UM1
+UM1 <- ProjecTILs.classifier(UM1, ref = ref.cd8.noTRM, skip.normalize=TRUE,filter.cells = T, ncores = 4)
+table(UM1$functional.cluster)
+DimPlot(UM1, group.by = 'functional.cluster', cols = ref.cd8.noTRM@misc$atlas.palette, label = T, order = T)
+
+# UM2 and 3
+UM2_3 <- ProjecTILs.classifier(UM2_3, ref = ref.cd8.noTRM, skip.normalize=TRUE,filter.cells = T, ncores = 4)
+table(UM2_3$functional.cluster)
+DimPlot(UM2_3, group.by = 'functional.cluster', cols = ref.cd8@misc$atlas.palette, label = T, order = T)
+
+# Radars UM1
+plot.states.radar(ref.cd8.noTRM, query = UM1, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'SLC4A10','TRAV1-2'))
+
+# Radars UM2_3
+plot.states.radar(ref.cd8.noTRM, query = UM2_3,  genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'SLC4A10','TRAV1-2'))
+```
+
+### Why are Tinn not found? Check UCell scores
+
+```{r}
+models <- get_scGateDB()
+UM1 <- AddModuleScore_UCell(UM1, features = str_split(models$human$CD8_TIL$CD8_Tinn$signature,pattern = ";"), assay = "RNA")
+
+UM2_3 <- AddModuleScore_UCell(UM2_3, features = str_split(models$human$CD8_TIL$CD8_Tinn$signature,pattern = ";"), assay = "RNA")
+
+FeaturePlot(UM1, ncol = 3, features = c("signature_1_UCell","signature_2_UCell","signature_3_UCell")) & NoLegend()
+FeaturePlot(UM2_3, ncol = 3, features = c("signature_1_UCell","signature_2_UCell","signature_3_UCell")) & NoLegend()
+```
+
+## Mapping Minh Ngoc dataset (unpublished)
+
+```{r}
+minh.seurat <- readRDS("~/Dropbox/CSI/Datasets/Minh_Ngoc_Duong/2022-09-19_all_seurat_with_CD8_dependency.rds")
+Idents(minh.seurat) <- minh.seurat$RNA_snn_res.0.35
+DimPlot(minh.seurat)
+
+# Heatmap
+markers <- FindAllMarkers(object = minh.seurat, only.pos = TRUE, assay = "RNA")
+markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC) -> top10
+Average <- AverageExpression(object = minh.seurat, return.seurat = T, assay = "RNA")
+Average <- ScaleData(object = Average, features = rownames(markers))
+DoHeatmap(Average, features = top10$gene, draw.lines = F) + scale_fill_viridis_c()
+
+# Projection
+ref.cd8.noTRM <- subset(ref.cd8, idents = "TRM", invert = T)
+minh.seurat <- ProjecTILs.classifier(minh.seurat, ref = ref.cd8.noTRM, filter.cells = T, ncores = 4)
+table(minh.seurat$functional.cluster)
+DimPlot(minh.seurat, group.by = 'functional.cluster', cols = ref.cd8@misc$atlas.palette, label = T, order = T)
+
+# Radars
+plot.states.radar(ref.cd8, query = minh.seurat, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "HAVCR2", "TOX", "ENTPD1", 'SLC4A10'))
+```
+
+## Mapping Li et al. 2019
+
+### From Zheng atlas
+
+```{r}
+seurat.li <- subset(seurat.merged, subset = dataset == "Melanoma.HanjieLi2018")
+
+# Radars
+plot.states.radar(ref.cd8, query = seurat.li, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'SLC4A10','TRAV1-2'))
+
+# Proportions
+plot.statepred.composition(ref.cd8, seurat.li, metric = "Percent") +
+    ggtitle("Li et al. 2019") + ylim(0, 70)+ theme_bw()+ RotatedAxis()
+```
+
+### From original study
+
+```{r}
+ref.cd8 <- readRDS('~/Dropbox/CSI/reference_atlases/CD8TIL_human_ss_0.1.rds')
+data <- Read10X_h5(filename = "~/Documents/Datasets/Li_2019/TISCH_SKCM_GSE123139_expression.h5")
+meta <- read.csv("~/Documents/Datasets/Li_2019/TISCH_SKCM_GSE123139_CellMetainfo_table.tsv", row.names = 1, sep = "\t")
+tisch.li <- CreateSeuratObject(counts = data, project = "Tisch.li", meta.data = meta)
+
+# Normalize data
+tisch.li <- NormalizeData(tisch.li)
+tisch.li <- ScaleData(tisch.li)
+
+# Setting up original UMAP space
+tisch.li@reductions[["umap"]] <- CreateDimReducObject(embeddings = cbind(tisch.li$UMAP_1, tisch.li$UMAP_2), key = "UMAP_", assay = DefaultAssay(tisch.li))
+DimPlot(tisch.li, reduction = 'umap') + NoLegend()
+DimPlot(tisch.li, reduction = 'umap', group.by = 'Cluster') 
+DimPlot(tisch.li, reduction = 'umap', label = T, group.by = 'Celltype..major.lineage.') + NoLegend()
+DimPlot(tisch.li, reduction = 'umap', group.by = 'TNMstage', label = T)
+DimPlot(tisch.li, reduction = 'umap', group.by = 'Treatment') + NoLegend()
+DimPlot(tisch.li, reduction = 'umap', group.by = 'Patient', label = T)
+
+# Mapping
+tisch.li <- Run.ProjecTILs(tisch.li, ref = ref.cd8, split.by = "Patient", skip.normalize = T, filter.cells = T, ncores = 1)
+DimPlot(tisch.li, reduction = 'umap', label = T, group.by = 'functional.cluster', cols = ref.cd8@misc$atlas.palette)
+
+# Comparing pre / post treatment
+query.sub.byTT <- SplitObject(tisch.li, split.by = "Treatment")
+
+# Radar plots
+plot.states.radar(ref.cd8, query = tisch.li, min.cells = 10, genes4radar = c('LEF1',"ACTN1", "TCF7", "CCR7", "GZMK","SESN3", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'SLC4A10','TRAV1-2')) 
+
+# Barplots
+n_nt <- length(table(query.sub.byTT$None$Patient))
+n_apd1 <- length(table(query.sub.byTT$aPD1$Patient))
+n_apd1_ctla4 <- length(table(query.sub.byTT$`aPD1+aCTLA4`$Patient))
+n_apd1_ctla4_apdl1 <- length(table(query.sub.byTT$`aPD1+aPDL1+aCTLA4`$Patient))
+
+a <- plot.statepred.composition(ref.cd8, query.sub.byTT$None, metric = "percent") + ylim(0,
+    68) + ggtitle(paste0("Not treated; n=", n_nt)) + theme_bw()+ RotatedAxis() + NoLegend()
+b <- plot.projection(ref.cd8, query.sub.byTT$None, linesize = 0.2) + theme_bw()+ NoLegend()+ ggtitle("Projection: untreated")
+c <- plot.statepred.composition(ref.cd8, query.sub.byTT$aPD1, metric = "percent") + ylim(0,
+    68) + ggtitle(paste0("aPD1; n=", n_apd1)) + theme_bw()+ RotatedAxis()+ NoLegend()
+d <- plot.projection(ref.cd8, query.sub.byTT$aPD1, linesize = 0.2) + theme_bw()+ NoLegend()+ ggtitle("Projection: aPD1")
+e <- plot.statepred.composition(ref.cd8, query.sub.byTT$`aPD1+aCTLA4`, metric = "percent") + ylim(0,
+    68) + ggtitle(paste0("aPD1+CTLA4; n=", n_apd1_ctla4)) + theme_bw()+ RotatedAxis()+ NoLegend()
+f <- plot.projection(ref.cd8, query.sub.byTT$`aPD1+aCTLA4`, linesize = 0.2) + theme_bw()+ NoLegend()+ ggtitle("Projection: aPD1+aCTLA4")
+g <- plot.statepred.composition(ref.cd8, query.sub.byTT$`aPD1+aPDL1+aCTLA4`, metric = "percent") + ylim(0,
+    68) + ggtitle(paste0("aPD1+aCTLA4+aPDL1; n=", n_apd1_ctla4_apdl1)) + theme_bw() + RotatedAxis()+ NoLegend()
+h <- plot.projection(ref.cd8, query.sub.byTT$`aPD1+aPDL1+aCTLA4`, linesize = 0.2) + theme_bw()+ NoLegend() + ggtitle("Projection: aPD1+aCTLA4+aPDL1")
+pll <- list(a,c,e,g,b,d,f,h)
+patchwork::wrap_plots(pll, ncol = 4)
+```
+
+With the Zheng atlas, we had 5958 CD8+ T cells after filtering, while we had 7776 cells starting from the TISCH atlas data, among which 4517 are from the untreated patients.
+
+## Mapping of healthy PBMC - multiple technologies
+
+This is a good dataset to test our map as this is blood samples from healthy patients, with many different technologies used.
+
+```{r}
+ref.cd8 <- ref
+library(SeuratData)
+data("pbmcsca")
+pbmcsca <- pbmcsca |> NormalizeData() |> FindVariableFeatures.STACAS() |>  ScaleData() |> RunPCA() |> RunUMAP(dims = 1:30)
+DimPlot(pbmcsca, reduction = 'umap', label = T, group.by = 'CellType')
+
+# Mapping
+pbmcsca <- ProjecTILs.classifier(pbmcsca, direct.projection = T, ref = ref.cd8, split.by = "Method", filter.cells = T, ncores = 1)
+DimPlot(pbmcsca, reduction = 'umap', label = T, group.by = 'functional.cluster', cols = ref.cd8@misc$atlas.palette)
+
+# Split by technology
+pbmcsca.split <- SplitObject(pbmcsca, split.by = "Method")
+
+# Radar plots
+plot.states.radar(ref.cd8, query = pbmcsca.split, min.cells = 10, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'SLC4A10','TRAV1-2')) 
+
+plot.states.radar(ref.cd8, query = pbmcsca.split, min.cells = 10, genes4radar = c("ZNF683","ITGAE","ITGA1","CXCR6","XCL1","XCL2","S1PR1")) 
+
+# Barplots
+pll <- list()
+for (i in names(pbmcsca.split)){
+  pll[[i]] <- plot.statepred.composition(ref.cd8, pbmcsca.split[[i]], metric = "Percent") +
+    ggtitle(i) + ylim(0, 90)+ theme_bw()+ RotatedAxis()+NoLegend()
+}
+wrap_plots(pll)
+```
+
+### Why some cells are mapped as TRM?
+
+```{r}
+# Check all DEGs
+Idents(pbmcsca) <- pbmcsca$functional.cluster
+markers <- FindAllMarkers(pbmcsca, assay = "RNA", only.pos = T)
+
+# Check DEGs by subsetting on reference HVGs only
+hvg <- intersect(rownames(pbmcsca), VariableFeatures(ref.cd8))
+markers.hvg <- FindAllMarkers(pbmcsca, assay = "RNA", only.pos = T, features = hvg)
+
+# TRM vs TEMRA
+markers.1 <- FindMarkers(pbmcsca, ident.1 = "TRM", ident.2 = "TEMRA", assay = "RNA", only.pos = F, features = hvg)
+
+# TRM vs EM
+markers.2 <- FindMarkers(pbmcsca, ident.1 = "TRM", ident.2 = "EM", assay = "RNA", only.pos = F, features = hvg)
+
+# Check TRM genes violins
+VlnPlot(pbmcsca, features = c("ZNF683","ITGAE","ITGA1","CXCR6","XCL1","XCL2","S1PR1","S1PR5"))
+
+# Heatmap
+markers.hvg %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC) -> top10
+Average <- AverageExpression(object = pbmcsca, return.seurat = T, assay = "RNA")
+Average <- ScaleData(object = Average, features = rownames(markers.hvg))
+DoHeatmap(Average, features = top10$gene, draw.lines = F) + scale_fill_viridis_c()
+```
+
+### Difference between blood TEMRA and tissue TEMRA?
+
+```{r}
+pbmc.temra <- subset(pbmcsca, idents="TEMRA")
+Idents(pbmc.temra) <- paste0(Idents(temra.comparison), "_pbmc")
+
+ref.cd8.temra <- subset(ref.cd8, idents="TEMRA")
+Idents(ref.cd8.temra) <- paste0(Idents(ref.cd8.temra), "_ref_CD8")
+
+temra.comparison <- merge(pbmc.temra, ref.cd8.temra)
+markers.temra <- FindAllMarkers(temra.comparison, assay = "RNA", only.pos = T, features = intersect(rownames(temra.comparison), VariableFeatures(ref.cd8)))
+```
+
+### Recheck mapping without TRM high cells
+
+```{r}
+trm.sign <- list(c("ZNF683","ITGAE","CXCR6")) # Same of for scGate model
+names(trm.sign) <- "trm.sign"
+ref.cd8 <- AddModuleScore_UCell(ref.cd8, features = trm.sign, ncores = 4)
+hist(ref.cd8$trm.sign_UCell)
+
+# subset Trm high cells in the CD8 reference
+ref.cd8.trm.filter <- subset(ref.cd8, subset = trm.sign_UCell < 0.5)
+DimPlot(ref.cd8.trm.filter)
+
+############ Recheck mapping
+# Mapping
+pbmcsca <- ProjecTILs.classifier(pbmcsca, ref = ref.cd8.trm.filter, split.by = "Method", filter.cells = T, ncores = 8)
+DimPlot(pbmcsca, reduction = 'umap', label = T, group.by = 'functional.cluster', cols = ref.cd8.trm.filter@misc$atlas.palette)
+
+# Split by technology
+pbmcsca.split <- SplitObject(pbmcsca, split.by = "Method")
+
+# Radar plots
+plot.states.radar(ref.cd8.trm.filter, query = pbmcsca.split, min.cells = 10, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'SLC4A10','TRAV1-2')) 
+
+plot.states.radar(ref.cd8.trm.filter, query = pbmcsca.split, min.cells = 10, genes4radar = c("ZNF683","ITGAE","ITGA1","CXCR6","XCL1","XCL2","S1PR1")) 
+
+# Barplots
+pll <- list()
+for (i in names(pbmcsca.split)){
+  pll[[i]] <- plot.statepred.composition(ref.cd8.trm.filter, pbmcsca.split[[i]], metric = "Percent") +
+    ggtitle(i) + ylim(0, 80)+ theme_bw()+ RotatedAxis()+NoLegend()
+}
+wrap_plots(pll)
+```
+
+## Mapping reference cells (autoconsistency)
+
+As an internal control, we can try to remap cells from the own reference.
+
+```{r}
+# load ssSTACAS reference
+ref.cd8 <- readRDS(file="~/Dropbox/CSI/Datasets/projectTils/Human_CD8_TILs_atlas.rds")
+
+# load integrated Zheng datasets
+zheng.integrated <- readRDS('cache/seurat.cd8.projected.merged.rds')
+
+# Remove the 3 ambiguous cells
+cells.remove <- grep(pattern = "S01_AML329-D0_AAGTTCTGGTGT|S01_AML329-D0_ACCTAGACGAGC|S01_AML329-D0_CTCCACCAAGCA", x = colnames(zheng.integrated), value = T)
+zheng.integrated <- subset(zheng.integrated, cells = cells.remove, invert = T)
+
+# Rename cells
+zheng.integrated <- RenameCells(zheng.integrated,new.names =  gsub(pattern = "_[a-zA-Z0-9]+$",replacement = "", x = colnames(zheng.integrated)))
+
+# Setup reference metadata
+zheng.integrated$reference <- NA
+zheng.integrated$reference[which(colnames(zheng.integrated) %in% colnames(ref))] <- "reference"
+'%!in%' <- function(x,y)!('%in%'(x,y))
+zheng.integrated$reference[which(colnames(zheng.integrated) %!in% colnames(ref))] <- "query"
+table(zheng.integrated$reference)
+
+# Saving
+saveRDS(zheng.integrated,'cache/seurat.cd8.projected.merged.rds')
+zheng.integrated <- readRDS('cache/seurat.cd8.projected.merged.rds')
+
+# Check autoconsistency
+zheng.integrated.reference <- subset(zheng.integrated,  subset = reference == "reference")
+ref.cd8$Idents <- Idents(ref.cd8)
+zheng.integrated.reference <- AddMetaData(zheng.integrated.reference, metadata = ref.cd8@meta.data)
+x <- table(zheng.integrated.reference$Idents, zheng.integrated.reference$functional.cluster)
+pheatmap(x, scale = "row")
+
+### Project data into itself
+ref.cd8.query <- ref.cd8
+DefaultAssay(ref.cd8.query) <- "RNA"
+ref.cd8.query <- ProjecTILs.classifier(ref.cd8.query, ref = ref.cd8, split.by = "batchV_dataset", filter.cells = T, ncores = 8)
+ref.cd8.query$functional.cluster <- factor(x = ref.cd8.query$functional.cluster, levels = levels(ref.cd8$functional.cluster))
+
+# Heatmap
+x <- table(ref.cd8.query$functional.cluster, ref.cd8$functional.cluster)
+pheatmap(x, scale = "row", cluster_rows = F, cluster_cols = F)
+```
+
+Autoconsistency mapping is good.
+
+```{r}
+self.projection.test <- make.projection(ref, ref = ref, filter.cells = T, scGate_model = models$human$generic$CD8T, skip.normalize = T, ncores = 8)
+
+# Difference with split.by?
+self.projection.test <- make.projection(ref, ref = ref, filter.cells = T, scGate_model = models$human$generic$CD8T, skip.normalize = T, ncores = 8)
+```
+
+## Mapping of healthy BMNC - CITE-seq
+
+Human bone marrow mononuclear (BMNC) cells
+
+```{r}
+library(SeuratDisk)
+library(SeuratData)
+
+bm <- RunUMAP(bm, nn.name = "weighted.nn", reduction.name = "wnn.umap", 
+              reduction.key = "wnnUMAP_", return.model = TRUE)
+reference <- LoadH5Seurat("aux/pbmc_multimodal.h5seurat")
+reference <- reference |> NormalizeData() |> ScaleData()
+DimPlot(reference, group.by = "celltype.l2", reduction = "wnn.umap", label = T) 
+
+# Subset ref if needed
+ref.cd8.notrm <- subset(ref.cd8, idents = "TRM", invert=T)
+
+# Mapping
+reference <- ProjecTILs.classifier(reference, ref = ref.cd8, filter.cells = T, skip.normalize = F, ncores = 8)
+DimPlot(reference,  label = T, group.by = 'functional.cluster', reduction = "wnn.umap",cols = ref.cd8@misc$atlas.palette)
+
+# Radar plots
+plot.states.radar(ref.cd8, query = reference, min.cells = 10, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'SLC4A10','TRAV1-2')) 
+
+plot.states.radar(ref.cd8, query = reference, min.cells = 10, genes4radar = c("ZNF683","ITGAE","ITGA1","CXCR6","XCL1","XCL2","S1PR1"))
+
+# Barplots
+plot.statepred.composition(ref.cd8, reference, metric = "Percent") + ylim(0, 100)+ theme_bw()+ RotatedAxis()+NoLegend()
+```
+
+### 10X PBMC with CD45RO/CD45RA
+
+```{r}
+data_dir <- 'aux/5k_PBMC_filtered_feature_bc_matrix/'
+list.files(data_dir) # Should show barcodes.tsv.gz, features.tsv.gz, and matrix.mtx.gz
+data <- Read10X(data.dir = data_dir)
+tenx.pbmc5k = CreateSeuratObject(counts = data$`Gene Expression`)
+tenx.pbmc5k[['ADT']] = CreateAssayObject(counts = data$`Antibody Capture`)
+tenx.pbmc5k <- NormalizeData(tenx.pbmc5k, assay = "ADT", normalization.method = 'CLR')
+
+# Pipeline
+tenx.pbmc5k <-  tenx.pbmc5k |> NormalizeData() |> FindVariableFeatures.STACAS() |>  ScaleData() |> RunPCA() |> RunUMAP(dims = 1:30) |> FindNeighbors() |> FindClusters()
+DimPlot(tenx.pbmc5k, label = T)
+FeaturePlot(tenx.pbmc5k, c("CD8a-TotalSeqB","CD45RO-TotalSeqB","CD45RA-TotalSeqB","CD3-TotalSeqB"), min.cutoff = "q3", max.cutoff = "q97", order = T)
+
+# Subset ref if needed
+ref.cd8.notrm <- subset(ref.cd8, idents = "TRM", invert=T)
+
+# Mapping
+tenx.pbmc5k <- ProjecTILs.classifier(tenx.pbmc5k, ref = ref.cd8, filter.cells = T, skip.normalize = F, ndim = 30, reduction = "umap", ncores = 8)
+DimPlot(tenx.pbmc5k,  label = T, group.by = 'functional.cluster', cols = ref.cd8@misc$atlas.palette)
+
+# Radar plots
+plot.states.radar(ref.cd8, query = tenx.pbmc5k, min.cells = 10, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'SLC4A10','TRAV1-2')) 
+
+plot.states.radar(ref.cd8, query = tenx.pbmc5k, min.cells = 10, genes4radar = c("ZNF683","ITGAE","ITGA1","CXCR6","XCL1","XCL2","S1PR1"))
+
+# Barplots
+plot.statepred.composition(ref.cd8, tenx.pbmc5k, metric = "Percent") + ylim(0, 100)+ theme_bw()+ RotatedAxis()+NoLegend()
+```
+
+## Mapping of Eberhast 2021
+
+```{r}
+ref.cd8 <- readRDS('~/Dropbox/CSI/reference_atlases/CD8TIL_human_ss_0.1.rds')
+ref.cd8 <- readRDS('~/Dropbox/CSI/Datasets/projectTils/Human_CD8_TILs_atlas.rds')
+
+ahmed.hpv <- readRDS('aux/R_Ahmed_HPV_2021/Rafi_HVP_Dataset_Nature.rds')
+ahmed.hpv <- ahmed.hpv %>% NormalizeData() %>% ScaleData()
+
+ahmed.hpv <- ProjecTILs.classifier(ahmed.hpv, ref = ref.cd8, filter.cells = T, split.by = 'Patient')
+
+# Radar plots
+plot.states.radar(ref.cd8, query = ahmed.hpv, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'SLC4A10','TRAV1-2')) 
+
+plot.states.radar(ref.cd8, query = ahmed.hpv, genes4radar = c("ZNF683","ITGAE","ITGA1","CXCR6","XCL1","XCL2","S1PR1"))
+
+# Barplots
+plot.statepred.composition(ref.cd8, ahmed.hpv, metric = "Percent") + ylim(0, 100)+ theme_bw()+ RotatedAxis()+NoLegend()
+
+# Split by tetramer
+query.projected_Human_Ref <- SplitObject(ahmed.hpv, split.by = "Tetramer")
+
+# Plot
+pll <- list()
+for (i in seq_along(query.projected_Human_Ref)) {
+    s <- names(query.projected_Human_Ref)[i]
+    pll[[i]]<-plot.statepred.composition(ref.cd8,  query.projected_Human_Ref[[s]],metric = "Percent")+theme_bw()+ggtitle(s)+ylim(0,80) + RotatedAxis() + NoLegend()
+}
+g <- do.call("arrangeGrob", c(pll, ncol = 3))
+plot(g)
+```
+
+## Mapping of N.Borcherding reference (v0.4)
+
+```{r}
+path_cache <- "./cache/"
+cache_filename <- paste0(path_cache,"seurat.list.NickB.v0.4.gated.filtered.rds")
+seurat.list.gated <- readRDS(cache_filename)
+ref.cd8 <- readRDS("~/Dropbox/CSI/Datasets/projectTils/NickB.Human_CD8_TILs_atlas.rds")
+
+# Running ProjecTILs
+seurat.list.gated <- sapply(seurat.list.gated, function(x) {
+    try(ProjecTILs::Run.ProjecTILs(ref = ref.cd8, query = x, filter.cells = F, split.by = 'SampleLabel', ndim = 30, ncores = 8, skip.normalize = F))
+}, USE.NAMES = T)
+
+# Save objects after projecTILs
+saveRDS(seurat.list.gated ,paste0(path_cache,"seurat.list.NickB.v0.4.gated.filtered.annotated.rds"))
+
+# Remove all error objects (not enough cells after Projectils filtering)
+seurat.list.class <- unlist(sapply(seurat.list.gated,function(x) class(x)))
+seurat.list.gated <- seurat.list.gated[which(seurat.list.class == 'Seurat')]
+
+# Save
+seurat.list.gated <- readRDS(paste0(path_cache,"seurat.list.NickB.v0.4.gated.filtered.annotated.rds"))
+
+# Remerging everything
+seurat.merged <- merge(seurat.list.gated[[1]], c(seurat.list.gated[2:length(seurat.list.gated)]))
+```
+
+### Analyze sex bias in pan-cancer data
+
+Let's analyse composition and gene expression differences between genders. We are especially interested in the Tpex population that seems critical to respond to ICB.
+
+```{r}
+# Take melanoma only
+seurat.lung <- subset(x = seurat.merged, subset = Tissue == 'Lung')
+
+Idents(seurat.lung) <- seurat.lung$functional.cluster
+pdf("NickB.DEGs.male.vs.female.pdf", width = 9, height = 9)
+for (i in levels(Idents(seurat.lung))){
+  degs <- try(FindMarkers(object = seurat.lung, ident.1 = "M", ident.2 = "F", subset.ident = i, group.by = "Gender", assay = "RNA"))
+  try(plot(EnhancedVolcano(degs,
+                       lab = rownames(degs),
+                       x = 'avg_log2FC',
+                       y = 'p_val_adj', 
+                       drawConnectors = T, 
+                       pCutoff = 0.01, 
+                       FCcutoff = 0.3)+ ggtitle(paste("cluster",i, sep = " "))))
+}
+dev.off()
+
+# Select TPEX
+Idents(seurat.merged) <- seurat.merged$functional.cluster
+seurat.merged.tpex <- subset(seurat.merged, idents = "TPEX")
+seurat.merged.tpex <- subset(seurat.merged.tpex, Gender  %in% c("F","M"))
+
+# Select only samples with enough TPEX
+samples <- which(table(seurat.merged.tpex$orig.ident) > 20)
+seurat.merged.tpex <- subset(seurat.merged.tpex, subset = orig.ident %in% names(samples))
+
+# Violin per patient in the lung, comparing male vs female
+VlnPlot(seurat.merged.tpex, group.by = "Cohort", split.by = "Gender", features = c("CXCL13","GZMB","XIST","DDX3Y"), assay = "RNA", ncol = 2, split.plot = F)
+
+# Split by tissue
+VlnPlot(seurat.merged.tpex, group.by = "Cohort", split.by = "Type", features = "CXCL13", assay = "RNA", ncol = 2, split.plot = F)
+
+# 
+```
+
+# Augment the reference with other datasets
+
+Can we find still the Tinn clusters?
+
+```{r}
+ref.cd8 <- readRDS(file="~/Dropbox/CSI/Datasets/projectTils/Human_CD8_TILs_atlas.rds")
+gueguen.cd3 <- readRDS('~/Dropbox/CSI/Datasets/Gueguen2021/NSCLC_CD3_11tumors.Rds')
+seurat.merged <- readRDS(seurat.merged,'cache/seurat.cd8.projected.merged.rds')
+
+gueguen.cd3 <- Run.ProjecTILs(query = gueguen.cd3, ref = ref.cd8, filter.cells = T, split.by = "orig.ident", skip.normalize = T)
+merged <- recalculate.embeddings(ref.cd8, projected = seurat.merged, n.neighbors = 15, umap.method = "umap")
+
+DimPlot(ref.cd8)
+DimPlot(merged)
+DimPlot(merged, group.by = "functional.cluster")
+DimPlot(merged, group.by = "dataset")
+```
+
+## Novel clusters?
+
+After producing a reference map, one underlying question is wether we captured enough heterogeneity. We can use ProjecTILs new function to discover new subtypes from mapped datasets.
+
+```{r}
+FeaturePlot(merged, features = "newclusters")
+```
+
+# Comparison with other annotation tools
+
+SingleR, Azimuth, Celltypist, scArches, Symphony etc.
+
+```{r}
+
+```

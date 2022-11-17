@@ -1,0 +1,149 @@
+---
+title: "Sex bias analyses"
+author: "Paul Gueguen, Massimo Anreatta, and Santiago  Carmona"
+date: "`r format(Sys.Date(),'%e de %B, %Y')`"
+output: 
+  rmdformats::downcute:
+    lightbox: true
+    thumbnails: false
+    self_contained: true
+    gallery: true
+    code_folding: show
+  pkgdown:
+    as_is: true
+---
+
+```{r}
+renv::restore()
+library(Seurat)
+library(ProjecTILs)
+library(EnhancedVolcano)
+```
+
+## Load mapped NickB. object
+
+Data was generated from Nick Borcherding v0.4 reference. Script to reproduce the input data can be found at: <https://github.com/carmonalab/human_TIL_atlas/blob/master/4-Reference_mapping.Rmd>
+
+```{r}
+# Read projected and filtered CD8 samples
+seurat.merged <- readRDS("~/Dropbox/CSI/Datasets/Human_TIL_Atlas/NickB.reference/seurat.list.NickB.v0.4.annotated.rds")
+
+# Merging all samples
+seurat.merged <- merge(seurat.merged[[1]], c(seurat.merged[2:length(seurat.merged)]))
+```
+
+## Compute DEGs between Male and Female for Lung samples
+
+```{r}
+# Take lung samples only
+seurat.lung <- subset(x = seurat.merged, subset = Tissue == 'Lung')
+
+# Compute Volcano 
+Idents(seurat.lung) <- seurat.lung$functional.cluster
+pdf("NickB.DEGs.male.vs.female.pdf", width = 9, height = 9)
+for (i in levels(Idents(seurat.lung))){
+  degs <- try(FindMarkers(object = seurat.lung, ident.1 = "M", ident.2 = "F", subset.ident = i, group.by = "Gender", assay = "RNA"))
+  try(plot(EnhancedVolcano(degs,
+                       lab = rownames(degs),
+                       x = 'avg_log2FC',
+                       y = 'p_val_adj', 
+                       drawConnectors = T, 
+                       pCutoff = 0.01, 
+                       FCcutoff = 0.3)+ ggtitle(paste("cluster",i, sep = " "))))
+}
+dev.off()
+```
+
+## Focused analysis on the TPEX subset
+
+```{r}
+# Select TPEX
+Idents(seurat.merged) <- seurat.merged$functional.cluster
+seurat.merged.tpex <- subset(seurat.merged, idents = "TPEX")
+seurat.merged.tpex <- subset(seurat.merged.tpex, Gender  %in% c("F","M"))
+
+# Select tumor samples only
+seurat.merged.tpex <- subset(seurat.merged.tpex, subset = Type == "Tumor")
+
+# Select only samples with enough TPEX
+samples <- which(table(seurat.merged.tpex$orig.ident) > 20)
+seurat.merged.tpex <- subset(seurat.merged.tpex, subset = orig.ident %in% names(samples))
+
+# Violin per patient in the lung, comparing male vs female
+VlnPlot(seurat.merged.tpex, group.by = "Cohort", split.by = "Gender", features = c("CXCL13","GZMB","XIST","DDX3Y"), assay = "RNA", ncol = 2, split.plot = F)
+
+VlnPlot(seurat.merged.tpex, group.by = "orig.ident", split.by = "Gender", features = c("CXCL13","GZMB","XIST","DDX3Y"), assay = "RNA", ncol = 2, split.plot = F)
+
+VlnPlot(seurat.merged.tpex, group.by = "Response", split.by = "Gender", features = c("CXCL13","GZMB","XIST","DDX3Y"), assay = "RNA", ncol = 2, split.plot = F) + RestoreLegend()
+```
+
+## T.test for averaged values
+
+```{r}
+# Setup metadata
+seurat.merged.tpex$Gender.orig.ident <- paste(seurat.merged.tpex$Gender, seurat.merged.tpex$orig.ident, sep = "_")
+
+# Select only big enough cohort GSE176021 (Caushi et al.)
+seurat.merged.tpex.c1 <- subset(seurat.merged.tpex, subset = Cohort == "GSE176021")
+
+# Compute average expression for cohort GSE176021
+avg.expr <- AverageExpression(seurat.merged.tpex.c1, features = c("CXCL13","XIST","RPS4Y1","DDX3Y","CD2","CD8A","TCF7","PDCD1","TOX","CD200","CRTAM","XCL1"), assays = "RNA", group.by = "Gender.orig.ident",  return.seurat = T)
+females <- grep(x =  unname(colnames(avg.expr)), pattern = "^F")
+males <- grep(x =  unname(colnames(avg.expr)), pattern = "^M")
+
+# Append metadata to averaged object
+data <- as.data.frame(t(avg.expr@assays$RNA@data))
+data$Gender <- NA
+data$Gender[females] <- "Female"
+data$Gender[males] <- "Male"
+
+# Convert to long format
+data$samples <- rownames(data)
+data <- data |> pivot_longer(cols = -c(samples,Gender))
+
+# Plot boxplots with t.test
+ggplot(data, aes(x=Gender, y=value, fill=Gender)) + 
+    geom_boxplot(mapping = aes()) + geom_point() + theme_bw() + 
+  ggtitle("Lung Tumor Tpex samples from Caushi et al.") + theme(axis.title.x = element_blank(), axis.text.x = element_text(size =11)) + facet_wrap(~name, scales = "free") + ggsignif::geom_signif(comparisons = list(c("Female", "Male")), test = "t.test", vjust = 2, map_signif_level = TRUE)
+
+# DEGs between these patients only
+seurat.merged.c1 <- subset(seurat.merged, subset = Cohort == "GSE176021")
+
+Idents(seurat.merged.c1) <- seurat.merged.c1$functional.cluster
+pdf("NickB.DEGs.male.vs.female.GSE176021.pdf", width = 9, height = 9)
+for (i in levels(Idents(seurat.merged.c1))){
+  degs <- try(FindMarkers(object = seurat.merged.c1, ident.1 = "M", ident.2 = "F", subset.ident = i, group.by = "Gender", assay = "RNA"))
+  try(plot(EnhancedVolcano(degs,
+                       lab = rownames(degs),
+                       x = 'avg_log2FC',
+                       y = 'p_val_adj', 
+                       drawConnectors = T, max.overlaps = 20,
+                       pCutoff = 0.01, 
+                       FCcutoff = 0.3)+ ggtitle(paste("cluster",i, sep = " "))))
+}
+dev.off()
+```
+
+## Test averaging on normalized UMI values directly
+
+```{r}
+data <- mean(GetAssayData(seurat.merged.tpex.c1,slot = "data",assay = "RNA")["CXCL13",])
+```
+
+## Design male/female scGate model
+
+```{r}
+sex.model <- gating_model(level = 1, positive = T, name = "sex.model", signature = c("XIST-","RPS4Y1","DDX3Y","EIF1AY"))
+
+# Classify all samples using this model
+seurat.merged <- scGate(seurat.merged, model=sex.model, ncores=1, assay = "RNA")
+
+# Confirm results according to previous annotation
+table(seurat.merged$Gender, seurat.merged$is.pure)
+
+# Confirm results according to tumor type enrichment (Sex-linked tumors like prostate and breast cancer, ovarian, endometrial can help us here, even if not perfect)
+table(seurat.merged$Tissue, seurat.merged$is.pure)
+
+# Consistency across patient? Patient must have only one label for sex
+table(seurat.merged$orig.ident,seurat.merged$Gender, seurat.merged$is.pure)
+```

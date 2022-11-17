@@ -1,0 +1,413 @@
+---
+title: Analyze breast cancer single-cell data from Basses et al. (Nature Medicine 2021)
+author: "M. Andreatta <massimo.andreatta at unil.ch> and S. Carmona <santiago.carmona at unil.ch>"
+knit: (function(input_file, encoding) {
+  out_dir <- 'docs';
+  rmarkdown::render(input_file,
+ encoding=encoding,
+ output_file=file.path(dirname(input_file), out_dir, 'index.html'))})
+---
+
+This dataset contains single-cell data from pre- versus on-treatment biopsies from patients receiving anti-PD1 immunotherapy (n=29) or chemotherapy (n=11). 
+TCR-seq data are also available. Lacking an objective measure of response to therapy, in this study they use as a proxy the level of T cell expansion to infer
+response to treatment. 
+
+Paper: https://www.nature.com/articles/s41591-021-01323-8
+Dataset: https://biokey.lambrechtslab.org/en/data-access
+Internal link: https://drive.switch.ch/index.php/s/uTrKHnTMohuUori
+
+```{r, message=FALSE, warning=F, results=FALSE}
+renv::restore()
+#remotes::install_github("carmonalab/ProjecTILs")
+
+library(ProjecTILs)
+library(scGate)
+library(Seurat)
+
+library(gridExtra)
+library(ggplot2)
+library(reshape2)
+```
+
+Read in data
+
+Tcell matrices have T cell subtype annotation by the authors
+```{r}
+ddir <- "input/Bassez_breast_data"
+
+#Count matrices
+f1 <- sprintf("%s/1864-counts_tcell_cohort1.rds", ddir)
+
+cohort1 <- readRDS(f1)
+dim(cohort1)
+
+#Metadata
+meta1 <- read.csv(sprintf("%s/1870-BIOKEY_metaData_tcells_cohort1_web.csv", ddir))
+rownames(meta1) <- meta1$Cell
+
+head(meta1)
+
+data.c1 <- CreateSeuratObject(cohort1, project="Cohort1_IT", meta.data = meta1)
+
+```
+
+TCR metadata
+```{r}
+#TCR metadata
+tcr1 <- read.csv(sprintf("%s/1879-BIOKEY_barcodes_vdj_combined_cohort1.csv", ddir)) 
+tcr1$barcode <- paste0(tcr1$barcode, "-1")
+rownames(tcr1) <- tcr1$barcode
+
+data.c1 <- AddMetaData(data.c1, metadata = tcr1)
+
+table(data.c1$SAMPLE_ID, data.c1$patient_id)
+#Note: some patients (e.g. BIOKEY_13 do not have TCR_seq data)
+
+#Calculate clomnotype counts and frequencies
+
+clonotypes <- table(data.c1$clonotype)
+clonotypes.vs.sample <-  as.matrix(table(data.c1$clonotype, data.c1$SAMPLE_ID))
+clonotypes.sums <- apply(clonotypes.vs.sample, 2, sum)
+
+freqs <- vector()
+
+for (i in 1:length(clonotypes)) {
+   ctype <- names(clonotypes)[i]
+   count <- clonotypes[i]
+   sample <- gsub("(\\S+)_clonotype\\S+", "\\1", ctype, perl=T)
+   freqs[ctype] <- count/clonotypes.sums[sample]
+}
+
+ctypes.vector <- data.c1@meta.data[,c("clonotype")]
+freqs.order <- rep(NA,length(ctypes.vector))
+counts.order <- rep(NA,length(ctypes.vector))
+
+for (r in 1:length(ctypes.vector)) {
+   c <- ctypes.vector[r]
+   if (!is.na(c)) {
+      counts.order[r] <- clonotypes[c]
+      freqs.order[r] <- freqs[c]
+   }
+}
+data.c1$clone_count <- counts.order
+data.c1$clone_freq <- freqs.order
+
+hist(data.c1$clone_count)
+hist(data.c1$clone_freq)
+
+#Define levels of expansion
+data.c1$expand <- NA
+data.c1$expand[!is.na(data.c1$clone_count) & data.c1$clone_count==1] <- "Single"
+data.c1$expand[!is.na(data.c1$clone_count) & data.c1$clone_count>1 & data.c1$clone_count<=5] <- "Small(1-5)"
+data.c1$expand[!is.na(data.c1$clone_count) & data.c1$clone_count>5 & data.c1$clone_count<=10] <- "Medium(6-10)"
+data.c1$expand[!is.na(data.c1$clone_count) & data.c1$clone_count>11 & data.c1$clone_count<=20] <- "Large(11-20)"
+data.c1$expand[!is.na(data.c1$clone_count) & data.c1$clone_count>20] <- "Hyper(>20)"
+
+data.c1$expand <- factor(data.c1$expand, 
+                levels = c("Hyper(>20)", "Large(11-20)", "Medium(6-10)", "Small(1-5)", "Single", NA))
+
+table(data.c1$expand, useNA = "ifany")
+```
+
+# QC
+Ribosomal and mitochondrial content
+```{r fig.height=3}
+percent.ribo.dv <- PercentageFeatureSet(data.c1, pattern = "^RP[LS]")
+percent.mito.dv <- PercentageFeatureSet(data.c1, pattern = "^MT-")
+
+data.c1 <- AddMetaData(data.c1, metadata = percent.ribo.dv, col.name = "percent.ribo")
+data.c1 <- AddMetaData(data.c1, metadata = percent.mito.dv, col.name = "percent.mito")
+
+Idents(data.c1) <- "patient_id"
+VlnPlot(data.c1, features = c("nFeature_RNA", "nCount_RNA","percent.ribo","percent.mito"), ncol = 2, pt.size=0)
+
+Idents(data.c1) <- "cellSubType"
+VlnPlot(data.c1, features = c("nFeature_RNA", "nCount_RNA","percent.ribo","percent.mito"), ncol = 2, pt.size=0)
+
+quantile(data.c1$nFeature_RNA, c(0, 0.01, 0.1, 0.5, 0.9, 0.99))
+quantile(data.c1$nCount_RNA, c(0, 0.01, 0.1, 0.5, 0.9, 0.99))
+```
+
+Minimal QC to remove extreme outliers
+```{r}
+dim(data.c1)
+data.c1 <- subset(data.c1, subset = nFeature_RNA>500 & nFeature_RNA<6000 & 
+                       nCount_RNA>600 & nCount_RNA< 25000 &
+                       percent.ribo < 50  &
+                       percent.mito < 15)
+dim(data.c1)
+```
+
+Have a look at the data, unsupervised analysis
+```{r}
+#First a little downsampling to speed things up...
+#ds <- 20000
+#data.c1 <- subset(data.c1, cells = sample(Cells(data.c1), ds))
+library(SignatuR)
+
+
+data.c1 <- NormalizeData(data.c1, verbose = FALSE)
+data.c1 <- FindVariableFeatures(data.c1, selection.method = "vst", nfeatures = 1000, verbose = FALSE)
+
+cycleCycle.symbol <- c(SignatuR$Hs$Programs$cellCycle.G1S, SignatuR$Hs$Programs$cellCycle.G2M)
+                       
+mito.genes <- grep(pattern = "^MT-", rownames(data.c1), value = TRUE)
+ribo.genes <- grep(pattern = "M?RP[LS]|DAP3|FAU|UBA52", rownames(data.c1), value = TRUE)
+
+genes.remove <- c(cycleCycle.symbol, mito.genes, ribo.genes) 
+
+data.c1@assays$RNA@var.features <- setdiff(data.c1@assays$RNA@var.features, genes.remove)
+```
+
+```{r}
+set.seed(1234)
+data.c1 <- ScaleData(data.c1)
+data.c1 <- RunPCA(data.c1, features = data.c1@assays$RNA@var.features, ndims.print = 1:5, nfeatures.print = 5)
+
+data.c1 <- RunUMAP(data.c1, reduction = "pca", dims = 1:20, seed.use=123)
+DimPlot(data.c1, reduction = "umap", group.by = "patient_id") + ggtitle("Patient")
+DimPlot(data.c1, reduction = "umap", group.by = "cellSubType", label=T) + ggtitle("Cell type")
+DimPlot(data.c1, reduction = "umap", group.by = "timepoint") + ggtitle("Timepoint")
+DimPlot(data.c1, reduction = "umap", group.by = "expansion") + ggtitle("Expansion")
+DimPlot(data.c1, reduction = "umap", group.by = "BC_type") + ggtitle("Cancer type")
+```
+
+#Check some markers on UMAP
+```{r fig.height=3}
+FeaturePlot(data.c1, reduction = "umap", features=c("CD4","CD8B","FOXP3","CD3E"), pt.size = 0.01, slot = "data", ncol=2)
+FeaturePlot(data.c1, reduction = "umap", features=c("PDCD1","TCF7","GZMB","GZMK"), pt.size = 0.01, slot = "data", ncol=2)
+FeaturePlot(data.c1, reduction = "umap", features=c("CXCL13","CD40LG","BCL6","CD200"), pt.size = 0.01, slot = "data", ncol=2)
+FeaturePlot(data.c1, reduction = "umap", features=c("HAVCR2","ENTPD1","PRF1","IL7R"), pt.size = 0.01, slot = "data", ncol=2)
+FeaturePlot(data.c1, reduction = "umap", features=c("TRDC","TRGC1","FGFBP2","KLRF1"), pt.size = 0.01, slot = "data", ncol=2)
+FeaturePlot(data.c1, reduction = "umap", features=c("MKI67","TOP2A","IFNG","nFeature_RNA"), pt.size = 0.01, slot = "data", ncol=2)
+```
+
+The CD4_EX cluster appears to be quite heterogeneous. It expresses Pdcd1, but also a good portion does express Tcf7, some Tim3+/Prf1+ cells in the north. Also specific expression of Cd200, which may indicate that (some of) these cells are Tfh...?
+
+Remove NK and gd T cells
+```{r}
+table(data.c1$cellSubType)
+
+dim(data.c1)
+data.ab <- subset(data.c1, subset=cellSubType %in% c("NK_REST","Vg9Vd2_gdT","gdT","NK_CYTO"), invert=T)
+dim(data.ab)
+```
+
+#ProjecTILs
+```{r}
+path <- "~/Dropbox/CSI/reference_atlases"
+ref.cd8 <- readRDS(sprintf("%s/CD8TIL_human_ss_0.1.rds",path))
+
+cols <- ref.cd8@misc$atlas.palette
+
+# Plotting
+ref.umap <- DimPlot(ref.cd8,  group.by = 'functional.cluster', label = T, repel = T, cols = cols) + theme(aspect.ratio = 1)
+ref.umap
+```
+
+```{r}
+query.list <- SplitObject(data.ab, split.by="patient_id")
+query.projected <- Run.ProjecTILs(ref.cd8, query = query.list, ncores=8)
+```
+
+If projecting by patient, merge back results after ProjecTILs analysis
+```{r}
+query.merged <- suppressMessages(Reduce(ProjecTILs:::merge.Seurat.embeddings, query.projected))
+```
+
+Save projected object
+```{r}
+saveRDS(query.merged, "aux/Bassez.projected.merged.rds")
+query.merged <- readRDS("aux/Bassez.projected.merged.rds")
+```
+
+```{r}
+g <- DimPlot(query.merged, group.by = "cellSubType", label=T) +
+  theme(aspect.ratio=1) + theme_bw()
+```
+
+Compare CD8T subtypes
+```{r fig.height=3}
+query.merged <- subset(query.merged, subset=cellSubType %in% c("CD8_EM","CD8_EMRA","CD8_EX","CD8_EX_Proliferating","CD8_N","CD8_RM"))
+library(patchwork)
+query.bysub <- SplitObject(query.merged, split.by = "cellSubType")
+pll <- list()
+
+for (n in names(query.bysub)) {
+  x <- query.bysub[[n]]
+  pll[[n]] <- plot.projection(ref.cd8, x, linesize = 0.5, pointsize = 0) + ggtitle(n) +
+    theme(axis.title=element_blank(),
+        axis.text=element_blank(),
+        axis.ticks=element_blank(), aspect.ratio = 1)
+}
+wrap_plots(pll)
+
+ggsave("plots/Bassez_projected_by_subtype.png", height=6, width=12)
+```
+
+```{r fig.height=4, fig.width=8}
+genes4radar <- c('CD4','CD8A', 'LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','KLRG1',"PDCD1",
+                                  'ZNF683','ITGAE', "CRTAM", "CD200","HAVCR2",
+                                  "TOX", "ENTPD1", 'SLC4A10','TRAV1-2')
+
+plot.states.radar(ref.cd8, query = query.bysub, min.cells = 20,
+                  genes4radar = genes4radar) 
+
+```
+
+```{r fig.height=4, fig.width=8}
+#By subtype
+for (n in names(query.bysub)) {
+  pll <- plot.states.radar(ref.cd8, query = query.bysub[[n]], min.cells = 30,
+                  genes4radar = genes4radar, return.as.list = TRUE)
+  
+  p <- wrap_plots(pll) + plot_annotation(sprintf("Profiles for %s", n))
+  plot(p)
+  
+  ggsave(sprintf("plots/Bassez_radars_by_subtype.%s.pdf", n), height=9, width=14)
+}
+```
+
+
+Compare responders vs. non-responders (based on clonal expansion) - pre-therapy
+```{r fig.height=3.5}
+#Subset on pre-treatment samples
+query.sub <- subset(query.merged, subset=timepoint=="Pre")
+#Split by expansion (defined by authors)
+query.sub <- subset(query.sub, subset=expansion %in% c("E","NE"))
+query.sub.byExp <- SplitObject(query.sub, split.by = "expansion")
+
+a <- plot.projection(ref.cd8, query=query.sub.byExp$E, linesize = 0.3, pointsize = 0) + 
+  ggtitle("Expanded") + NoLegend() +  theme(aspect.ratio = 1,
+        axis.text=element_blank(),
+        axis.ticks=element_blank())
+b <- plot.projection(ref.cd8, query=query.sub.byExp$NE, linesize = 0.3, pointsize = 0)  +
+  ggtitle("Non-Expanded") + NoLegend() + theme(aspect.ratio = 1,
+        axis.text=element_blank(),
+        axis.ticks=element_blank())
+
+a | b
+
+ggsave("plots/Bassez_expanded_vs_non.png", height=4.5, width=6)
+
+c <- plot.statepred.composition(ref.cd8, query.sub.byExp$E, metric = "percent") + ylim(0,30) + ggtitle("Expanded")
+d <- plot.statepred.composition(ref.cd8, query.sub.byExp$NE, metric = "percent") + ylim(0,30)  + ggtitle("Non-Expanded")
+c | d
+```
+
+Fold-change
+```{r fig.heigh=8, fig.width=5, fig.align="center",  cache=FALSE}
+t <- table(query.merged$functional.cluster)>20
+which.types <- names(t[t==TRUE])
+
+cols_use  <- ref.cd8@misc$atlas.palette[which.types]
+
+#Responder vs non Responder
+query.list <- SplitObject(query.merged, split.by = "expansion")
+
+norm.c <- table(query.list[["NE"]]$functional.cluster)/sum(table(query.list[["NE"]]$functional.cluster))
+norm.q <- table(query.list[["E"]]$functional.cluster)/sum(table(query.list[["E"]]$functional.cluster))
+
+foldchange <- norm.q[which.types]/norm.c[which.types]
+foldchange <- sort(foldchange,decreasing = T)
+
+tb.m <- melt(foldchange)
+colnames(tb.m) <- c("Cell_state","Fold_change")
+ggplot(tb.m, aes(x=Cell_state, y=Fold_change, fill=Cell_state)) + geom_bar(stat="identity") +
+  scale_fill_manual(values=cols_use) + geom_hline(yintercept = 1) + scale_y_continuous(trans='log2') +
+  theme(axis.text.x=element_blank(), legend.position="left") + ggtitle("Responder vs. Non-responder") +
+  theme_light()
+
+ggsave("plots/Bassez_expanded_vs_non.foldchange.png", height=4, width=4)
+
+```
+
+Compare responders vs. non-responders (based on clonal expansion) - post-therapy
+```{r fig.height=3.5}
+#Subset on pre-treatment samples
+query.sub <- subset(query.merged, subset=timepoint=="On")
+#Split by expansion (defined by authors)
+query.sub <- subset(query.sub, subset=expansion %in% c("E","NE"))
+query.sub.byExp <- SplitObject(query.sub, split.by = "expansion")
+
+a <- plot.projection(ref.cd8, query=query.sub.byExp$E, linesize = 0.5, pointsize = 0.2) + ggtitle("Expanded")
+b <- plot.projection(ref.cd8, query=query.sub.byExp$NE, linesize = 0.5, pointsize = 0.2)  + ggtitle("Non-Expanded")
+
+a | b
+
+c <- plot.statepred.composition(ref.cd8, query.sub.byExp$E, metric = "percent") + ylim(0,40) + ggtitle("Expanded")
+d <- plot.statepred.composition(ref.cd8, query.sub.byExp$NE, metric = "percent") + ylim(0,40)  + ggtitle("Non-Expanded")
+c | d
+```
+
+
+Plot clonal expansion on the UMAP
+```{r}
+palette <- colorRampPalette(c("#FF4B20", "#FFB433", "#C6FDEC", "#7AC5FF", "#0348A6"))
+DimPlot(query.merged, group.by = "expansion") + scale_color_manual(values = c(palette(5)), na.value="grey")
+```
+
+Show largest clones
+```{r fig.width=12, fig.height=12}
+clone_call = "clonotype"   #which column to use to determine clonotypes
+top.clones <- 20
+
+clonotypeSizes <- sort(table(query.merged[[clone_call]]),decreasing = T)
+
+bigClonotypes <- names(clonotypeSizes)[1:top.clones]
+
+plots <- list()
+for (i in 1:length(bigClonotypes)) {
+  
+  ctype <- bigClonotypes[i]
+  patient <- unique(query.merged$patient_id[which(query.merged[[clone_call]]==ctype)])
+  aa <- unique(query.merged$cdr3_aa[which(query.merged[[clone_call]]==ctype)])
+  
+  plots[[i]] <- plot.projection(ref.cd8, query.merged[,which(query.merged[[clone_call]]==ctype)],
+                                linesize=0.3, pointsize = 0.3) + 
+    ggtitle(sprintf("%s\n%s\n%s - size %i", ctype, aa, patient, clonotypeSizes[ctype]))
+}
+
+wrap_plots(plots)
+
+```
+
+Export representative plots
+```{r fig.width=6}
+a <- plots[[1]] + NoLegend() + theme(axis.title=element_blank(),
+        axis.text=element_blank(),
+        axis.ticks=element_blank(), aspect.ratio = 1,
+        plot.title = element_text(size=8))
+
+b <- plots[[7]] + NoLegend() + theme(axis.title=element_blank(),
+        axis.text=element_blank(),
+        axis.ticks=element_blank(), aspect.ratio = 1,
+        plot.title = element_text(size=8))
+
+c <- plots[[14]] + NoLegend() + theme(axis.title=element_blank(),
+        axis.text=element_blank(),
+        axis.ticks=element_blank(), aspect.ratio = 1,
+        plot.title = element_text(size=8))
+
+a | b | c
+
+#ggsave("plots/Bassez_largest_clonotypes.png", height=3.5, width=11)
+ggsave("plots/Bassez_selected_clonotypes.png", height=3.5, width=11)
+```
+
+```{r fig.height=4}
+cc <- c("BIOKEY_28_Pre_clonotype2","BIOKEY_28_Pre_clonotype1")
+
+cc <- "BIOKEY_14_Pre_clonotype1"
+#cc <- "BIOKEY_11_On_clonotype1"
+
+sub <- subset(query.merged, subset=clonotype %in% cc)
+plot.projection(ref.cd8, sub)
+
+genes4radar <- c('LEF1', "TCF7", "CCR7", "IL7R",'KLRG1',
+                 'ZNF683',"TOX", 'ITGAE',"GZMK","CXCR3","LY6C2", "GZMB","PRF1", "PDCD1", "HAVCR2",
+                 "ENTPD1","LAG3","CTLA4")
+
+
+plot.states.radar(ref.cd8, sub, genes4radar = c(genes4radar,"ITGA1","IL7R","GZMB"), min.cells = 10)
+```
