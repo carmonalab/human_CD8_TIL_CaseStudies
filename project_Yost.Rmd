@@ -26,23 +26,21 @@ library(ProjecTILs)
 library(gridExtra)
 library(ggrepel)
 library(UCell)
-library(stringr)
 library(plotly)
-options(future.globals.maxSize= 5000*1024^2)
+#options(future.globals.maxSize= 5000*1024^2)
 ```
 
 ## Loading reference
 
 ```{r}
-path <- "~/Dropbox/CSI/reference_atlases"
-ref.cd8 <- readRDS(sprintf("%s/CD8TIL_human_ss_0.1.rds",path))
+path <- "~/Dropbox/CSI/Datasets/projectTils/"
+ref.cd8 <- readRDS(sprintf("%s/NickB.Human_CD8_TILs_atlas.rds",path))
 
 cols <- ref.cd8@misc$atlas.palette
 
 # Plotting
 DimPlot(ref.cd8,  group.by = 'functional.cluster', label = T, repel = T, cols = cols) + theme(aspect.ratio = 1)
 ```
-
 
 ## Mapping of [Yost et al. 2019](https://pubmed.ncbi.nlm.nih.gov/31359002/)
 
@@ -63,7 +61,6 @@ if (!file.exists(cached.object)) {
     ## Load expression matrix and metadata
     exp.mat <- read.delim(sprintf("%s/%s/GSE123813_bcc_scRNA_counts.txt.gz",
         datadir, geo_acc), header = F, sep = "\t")
-    
     
     query.object <- CreateSeuratObject(counts = exp.mat, project = "Yost", min.cells = 3, min.features = 50)
     
@@ -107,6 +104,7 @@ query.object<- query.object[,which(!is.na(query.object$patient))]
 ```
 
 Projection into the reference
+
 ```{r}
 # Mapping
 query.list <- SplitObject(query.object, split.by = "patient")
@@ -119,7 +117,9 @@ lapply(names(query.projected), function(n) {
   plot.projection(ref.cd8, x, linesize = 0.5, pointsize = 0) + ggtitle(n)
 })  
 ```
+
 Merge and split by original annotation
+
 ```{r}
 merged <- Reduce(ProjecTILs::merge.Seurat.embeddings, query.projected)
 
@@ -129,6 +129,7 @@ table(merged$cluster.T, merged$functional.cluster, useNA = "ifany")
 ```
 
 Compare CD8T subtypes
+
 ```{r fig.height=3}
 merged <- subset(merged, subset=cluster.T %in% c("CD8_act","CD8_eff","CD8_ex","CD8_ex_act","CD8_mem","Naive"))
 
@@ -179,5 +180,3 @@ CD8_act is a mixture of many different cell types (this subtype was contributed 
 CD8_mem are also a mix of CM, EM and even TEX
 
 CD8_eff are projected into KLRG1+FGFBP2+ TEMRA
-
-

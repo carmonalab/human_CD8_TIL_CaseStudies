@@ -28,23 +28,29 @@ library(ggrepel)
 library(UCell)
 library(stringr)
 library(plotly)
-
 #devtools::install_github('satijalab/seurat-data')
 library(SeuratData)
-
-options(future.globals.maxSize= 5000*1024^2)
+#options(future.globals.maxSize= 5000*1024^2)
 ```
 
 ## Loading reference
 
 ```{r}
-path <- "~/Dropbox/CSI/reference_atlases"
-ref.cd8 <- readRDS(sprintf("%s/CD8TIL_human_ss_0.1.rds",path))
+path <- "~/Dropbox/CSI/Datasets/projectTils/"
+#ref.cd8 <- readRDS(sprintf("%s/NickB.Human_CD8_TILs_atlas.rds",path))
+ref.cd8 <- readRDS(sprintf("%s/CD8T_human_ref_v0.2_ds.rds",path))
 
-cols <- ref.cd8@misc$atlas.palette
+myseed <- set.seed(123)
+```
+
+
+```{r}
+# Setup colors
+mycols <- ref.cd8@misc$atlas.palette
+
 
 # Plotting
-DimPlot(ref.cd8,  group.by = 'functional.cluster', label = T, repel = T, cols = cols) + theme(aspect.ratio = 1)
+DimPlot(ref.cd8,  group.by = 'functional.cluster', label = T, repel = T, cols = mycols) + theme(aspect.ratio = 1)
 ```
 
 
@@ -54,12 +60,12 @@ This is a good dataset to test our map as this is blood samples from healthy pat
 
 ```{r}
 library(SeuratData)
-
 #SeuratData::AvailableData()
 #SeuratData::InstallData('pbmcsca')
 data('pbmcsca')
 
-pbmcsca <- pbmcsca |> NormalizeData() |> FindVariableFeatures.STACAS() |>  ScaleData() |> RunPCA(npcs=30) |> RunUMAP(dims = 1:30)
+
+pbmcsca <- pbmcsca |> NormalizeData() |> FindVariableFeatures.STACAS() |>  ScaleData() |> RunPCA(npcs=30) |> RunUMAP(dims = 1:30, seed.use = myseed)
 DimPlot(pbmcsca, reduction = 'umap', label = T, group.by = 'CellType')
 
 #DimPlot(pbmcsca, reduction = 'umap', group.by = 'Cluster', split.by = 'Cluster')
@@ -94,18 +100,22 @@ No naive cells in this PBMC dataset? Were they sorted out?
 # Mapping
 this.p <- Run.ProjecTILs(this, ref = ref.cd8, filter.cells = T, ncores = 8)
 plot.projection(ref.cd8, this.p, pointsize = 0.2, linesize = 0.5)
+
+# Original UMAP
+this <- ProjecTILs.classifier(this, ref = ref.cd8, filter.cells = T, ncores = 8)
+DimPlot(this, group.by = "functional.cluster", cols = mycols, label = T, repel = T)
 ```
+
 ```{r}
-plot.statepred.composition(ref.cd8, query=this.p, cols=ref.cd8@misc$atlas.palette)
+plot.statepred.composition(ref.cd8, query=this.p)
 ```
 
 ```{r fig.height=4, fig.width=8}
-genes4radar <- c('CD3E','CD8A','LEF1', "TCF7", "CCR7", "GZMK", 'FCGR3A','KLRG1',"PDCD1",
-                                  'ZNF683','ITGAE', "GZMB","PRF1", "HAVCR2",
-                                  "TOX", "ENTPD1", 'SLC4A10','TRAV1-2')
+genes4radar <- c('LEF1',"SELL", "TCF7", "CCR7","SESN3","GZMK","FGFBP2","CX3CR1", 'FCGR3A','KLRG1',"PDCD1",
+                                  "GZMB","PRF1", "HAVCR2","HAVCR2",
+                                  "TOX", "ENTPD1", 'SLC4A10','KLRB1') 
 
-plot.states.radar(ref.cd8, query = this.p, min.cells = 10,
-                  genes4radar = genes4radar) 
-
+p <- plot.states.radar(ref.cd8, query = this.p, min.cells = 30,
+                  genes4radar = genes4radar, return = T) 
+wrap_plots(p) + theme_minimal()
 ```
-

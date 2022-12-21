@@ -1,5 +1,4 @@
 ---
-pca---
 title: "CD8 TIL reference mapping"
 author: "Paul Gueguen, Massimo Anreatta, and Santiago  Carmona"
 date: "`r format(Sys.Date(),'%e de %B, %Y')`"
@@ -23,7 +22,6 @@ library(xlsx)
 library(STACAS)
 library(data.table)
 library(GEOquery)
-library(ROGUE)
 library(EnhancedVolcano)
 library(patchwork)
 library(pheatmap)
@@ -61,7 +59,7 @@ names(mycolors.cancerType) <- c("AML","BC" ,"BM" ,  "CHOL","CRC","HCC","ESCA","H
 ## Loading reference
 
 ```{r}
-#ref.cd8 <- readRDS(file="~/Dropbox/CSI/Datasets/projectTils/Human_CD8_TILs_atlas.rds")
+ref.cd8 <- readRDS(file="~/Dropbox/CSI/Datasets/projectTils/NickB.Human_CD8_TILs_atlas_downsampled.rds")
 
 path <- "~/Dropbox/CSI/reference_atlases"
 ref.cd8 <- readRDS(sprintf("%s/CD8TIL_human_ss_0.1.rds",path))
@@ -142,7 +140,7 @@ query.object <- AddMetaData(object = query.object, metadata = meta.sf, col.name 
 query.object <- subset(query.object, subset = Time == "Pre")
 
 # Compare by splitting by patients
-query.projected <- ProjecTILs.classifier(query.object, ref = ref.cd8, filter.cells = T, ncores = 1)
+query.projected <- Run.ProjecTILs(query.object, ref = ref.cd8, filter.cells = T, ncores = 1)
 plot.statepred.composition(ref.cd8, query.projected)
 table.split <- table(query.projected$functional.cluster)
 
@@ -180,7 +178,7 @@ plot.statepred.composition(ref.cd8, zheng.sadefeldman, metric = "Percent") +
 ```{r}
 gueguen.cd3 <- readRDS('~/Dropbox/CSI/Datasets/Gueguen2021/NSCLC_CD3_11tumors.Rds')
 gueguen.cd3$seurat_clusters <- Idents(gueguen.cd3)
-ref <- readRDS(file="~/Dropbox/CSI/Datasets/Human_TIL_Atlas/ss.stacas.projectils.reference.rds")
+ref <- readRDS(file="~/Dropbox/CSI/Datasets/projectTils/NickB.Human_CD8_TILs_atlas_downsampled.rds")
 
 # scgate
 models <- scGate::get_scGateDB()
@@ -188,16 +186,13 @@ cd8.til <- scGate(gueguen.cd3, model = models$human$CD8_TIL$CD8_TIL_filtering, a
 generic.cd8 <- scGate(gueguen.cd3, assay = 'RNA', model = models$human$generic$CD8T, ncores = 2)
 
 # Projection
-gueguen.cd3 <- ProjecTILs.classifier(gueguen.cd3, ref = ref.cd8, direct.projection = T, filter.cells = T, split.by = 'orig.ident', ncores = 8)
-gueguen.cd3 <- table(gueguen.cd3$functional.cluster)
-DimPlot(query.projected.split, group.by = 'functional.cluster', order = T, cols = cols)
-
-# Compare split and merge projections
-rbind(gueguen.merged, gueguen.split)
-DimPlot(query.projected, group.by = 'functional.cluster', cols = cols, order = T) & ggtitle('projected on merged objects') + DimPlot(query.projected.split, group.by = 'functional.cluster', cols = cols, order = T) & ggtitle('projected on split objects')
+gueguen.cd3 <- Run.ProjecTILs(gueguen.cd3, ref = ref.cd8, filter.cells = T, split.by = 'orig.ident', ncores = 6)
+table(gueguen.cd3$functional.cluster)
+DimPlot(gueguen.cd3, group.by = 'functional.cluster', order = T, cols = cols)
 
 # Radar plots
-plot.states.radar(ref, query = query.projected, min.cells = 10, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'TYROBP','KIR2DL1')) 
+p <- plot.states.radar(ref.cd8, query = gueguen.cd3, min.cells = 10, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'TYROBP','KIR2DL1'), return = T) 
+wrap_plots(p) + theme_bw()
 
 # Add metadata to original object to plot the ProjecTILs annotation
 gueguen.cd3 <- AddMetaData(object = gueguen.cd3, metadata = query.projected$functional.cluster, col.name = 'functional.cluster')
@@ -210,7 +205,8 @@ models <- get_scGateDB()
 gueguen.cd3 <- scGate(gueguen.cd3, model = models$human$CD8_TIL, ncores = 1, assay = 'RNA')
 DimPlot(gueguen.cd3, reduction = "umap", group.by = "scGate_multi", label = T, cols = unname(pals::glasbey()))
 
-
+# barplot
+plot.statepred.composition(ref.cd8,  gueguen.cd3, metric = "Percent")  + ylim(0, 52) + theme_bw() + RotatedAxis()
 ```
 
 ### Mapping on Gueguen CD8 only
@@ -303,13 +299,16 @@ gueguen.cd3.blood <- readRDS('~/Dropbox/CSI/Datasets/Gueguen2021/NSCLC_CD3_4tumo
 gueguen.cd3.blood <- subset(gueguen.cd3.blood, subset = tissue == "blood")
 
 # Projection
-gueguen.cd3.blood <- ProjecTILs.classifier(gueguen.cd3.blood,  STACAS.k.weight = 5, ref = ref.cd8, filter.cells = T, split.by = "orig.ident", skip.normalize = T, ncores = 1)
+gueguen.cd3.blood <- ProjecTILs.classifier(gueguen.cd3.blood, ref = ref.cd8, filter.cells = T, split.by = "orig.ident", skip.normalize = T, ncores = 6)
+
+# Full projection
+gueguen.cd3.blood <- Run.ProjecTILs(gueguen.cd3.blood, ref = ref.cd8, filter.cells = T, split.by = "orig.ident", skip.normalize = T, ncores = 6)
 
 # Dimplot
 DimPlot(gueguen.cd3.blood, group.by = 'functional.cluster', label = T, repel = T, cols = ref.cd8@misc$atlas.palette)
 
 # Radar plots
-plot.states.radar(ref.cd8, query = gueguen.cd3.blood, min.cells = 10, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'SLC4A10','TRAV1-2')) 
+plot.states.radar(ref = ref.cd8, query = gueguen.cd3.blood, genes4radar = genes)
 
 # barplot
 plot.statepred.composition(ref.cd8,  gueguen.cd3.blood, metric = "Percent")  + ylim(0, 52) + theme_bw() + RotatedAxis()
@@ -324,15 +323,11 @@ FeaturePlot(gueguen.cd3.blood, features = c("TYROBP","KIR3DL2","KIR2DL3","KLRC1"
 ```{r}
 # Loading
 niborski.cd8 <- readRDS(file = '~/Dropbox/CSI/Datasets/Niborski2022/Niborski_2022_Seurat_v3.Rds')
-ref.cd8 <- readRDS(file = '~/Dropbox/CSI/Datasets/projectTils/ref_TILAtlas_mouse_v1.rds')
-
-# Remove TRM from human reference
-ref.cd8 <- subset(ref.cd8, idents = 'TRM', invert = T )
-ref.cd8.downsample <- subset(ref.cd8,  downsample = 500)
+ref.cd8 <- readRDS(file = '~/Dropbox/CSI/Datasets/projectTils/CD8T_human_ref_v0.2_ds.rds')
 
 # Mapping
-query.projected <- Run.ProjecTILs(niborski.cd8, skip.normalize = T, ref = ref.cd8, filter.cells = F, direct.projection = T, ncores = 1, query.assay = 'RNA')
-plot.projection(ref.cd8.downsample, query.projected)
+query.projected <- Run.ProjecTILs(niborski.cd8, skip.normalize = T, ref = ref.cd8, filter.cells = F, ncores = 6, query.assay = 'RNA')
+plot.projection(ref.cd8, query.projected)
 
 # Response to therapy
 query.list <- SplitObject(query.projected, split.by = "condition")
@@ -352,7 +347,14 @@ pll[[8]] <- plot.statepred.composition(ref.cd8,  query.list[["KO_T"]], metric = 
 grid.arrange(grobs = pll, ncol = 2, nrow = 4, widths = c(1.5, 1))
 
 # Radar plots
-plot.states.radar(ref.cd8, query = query.projected, min.cells = 10, genes4radar = c('Lef1', "Tcf7", "Ccr7", "Gzmk", "Klrg1",'Fcgr4','Zfp683','Itgae', "Crtam", "Cd200",'Gng4', "Havcr2", "Tox", "Entpd1", 'Mcm5','Top2a'))
+genes <-  c('SELL','LEF1', "TCF7",'IL7R', "CCR7","CXCR5","GZMK","KLRG1","CX3CR1","KLRG1","FGFBP2",'FCGR3A',"ZNF683","ITGAE","ITGA1",'XCL1',"XCL2",'CD200', "CRTAM",'PDCD1', "HAVCR2","ENTPD1","TIGIT","LAG3","CTLA4","CCL5", "GZMB","CCL5","NKG7","PRF1")
+
+p <- plot.states.radar(ref = ref.cd8, query = query.list, min.cells = 20, genes4radar = genes, return = T)
+wrap_plots(p) + theme_bw()
+
+# Project onto original UMAP
+niborski.cd8 <- ProjecTILs.classifier(niborski.cd8, skip.normalize = T, ref = ref.cd8, filter.cells = F, ncores = 6, query.assay = 'RNA')
+DimPlot(niborski.cd8, group.by = "functional.cluster", label = T, cols = mycols)
 ```
 
 ## Mapping of [Bassez et al. 2021](https://pubmed.ncbi.nlm.nih.gov/33958794/)
@@ -401,10 +403,11 @@ data.seurat <- subset(data.seurat, cells = WhichCells(data.seurat, downsample = 
 
 # Saving
 saveRDS(object = data.seurat, file = 'Bassez.seurat.rds')
+data.seurat <- readRDS(file = "input/Bassez_breast_data/Bassez.seurat.rds")
 
 # Mapping
 models <- scGate::get_scGateDB()
-query.projected <- ProjecTILs.classifier(data.seurat, split.by =  "patient_id", ref, filter.cells = T, scGate_model = models$human$CD8_TIL$CD8_TIL_filtering, ncores = 1)
+query.projected <- Run.ProjecTILs(data.seurat, split.by =  "patient_id", ref.cd8, filter.cells = T,  ncores = 6)
 
 # Comparing R / NR
 query.sub.byExp <- subset(query.projected, subset = expansion %in% c("E",
@@ -412,16 +415,20 @@ query.sub.byExp <- subset(query.projected, subset = expansion %in% c("E",
 query.sub.byExp <- SplitObject(query.sub.byExp, split.by = "expansion")
 
 # Radar plots
-plot.states.radar(ref, query = query.sub.byExp, min.cells = 10, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'SLC4A10','TRAV1-2')) 
+p <- plot.states.radar(ref.cd8, query = query.sub.byExp, min.cells = 10, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'SLC4A10','TRAV1-2'),return = T) 
+wrap_plots(p) + theme_bw()
 
 # Barplots
 n_e <- length(table(query.sub.byExp$E$patient_id))
 n_ne <- length(table(query.sub.byExp$NE$patient_id))
-c <- plot.statepred.composition(ref, query.sub.byExp$E, metric = "percent", cols = mycols) + ylim(0,
+a <- plot.statepred.composition(ref.cd8, query.sub.byExp$E, metric = "percent") + ylim(0,
     40) + ggtitle(paste0("Responders; n=", n_e)) + theme_bw()
-d <- plot.statepred.composition(ref, query.sub.byExp$NE, metric = "percent", cols = mycols) + ylim(0,
+b <- plot.projection(ref.cd8, query.sub.byExp$E, linesize = 0.5) + ggtitle("Responders")
+
+c <- plot.statepred.composition(ref.cd8, query.sub.byExp$NE, metric = "percent") + ylim(0,
     40) + ggtitle(paste0("Non-Responders; n=", n_ne)) + theme_bw()
-c | d
+d <- plot.projection(ref.cd8, query.sub.byExp$NE, linesize = 0.5) + ggtitle("Non-Responders")
+(a | b) /(c | d)
 
 # Saving
 saveRDS(object = query.projected, file = 'Bassez.projected.rds')
@@ -1264,7 +1271,7 @@ The original annotation from this study seemed not ideal. Let's check our initia
 
 ```{r}
 # Load data
-cached.object <- "Yost.seurat.rds"
+cached.object <- "input/Yost/Yost.seurat.rds"
 if (!file.exists(cached.object)) {
     library(GEOquery)
     geo_acc <- "GSE123813"
@@ -1292,7 +1299,7 @@ if (!file.exists(cached.object)) {
     query.object <- AddMetaData(query.object, metadata = meta)
     saveRDS(query.object, file = cached.object)
 } else {
-    query.object <- readRDS(cached.object)
+    query.object <- readRDS(file = cached.object)
 }
 
 # Normalize data
@@ -1309,8 +1316,7 @@ DimPlot(query.object, reduction = 'umap', group.by = 'cluster', label = T)
 query.object.filtered <- query.object[,which(!is.na(query.object$patient))]
 
 # Mapping
-models <- scGate::get_scGateDB()
-query.projected <- Run.ProjecTILs(query.object.filtered, split.by =  "patient", ref.cd8, filter.cells = T, ncores = 8)
+query.projected <- Run.ProjecTILs(query.object.filtered, split.by =  "patient", ref.cd8, filter.cells = T, ncores = 6)
 DimPlot(query.projected, reduction = 'umap', label = T, group.by = 'functional.cluster')
 
 # Comparing pre / post treatment
@@ -1319,15 +1325,16 @@ query.sub.byTT <- subset(query.projected, subset = treatment %in% c("pre",
 query.sub.byTT <- SplitObject(query.sub.byTT, split.by = "treatment")
 
 # Radar plots
-plot.states.radar(ref.cd8, query = query.sub.byTT, min.cells = 10, genes4radar = c('LEF1', "TCF7","ACTN1", "CCR7","SESN3","GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'SLC4A10','TRAV1-2')) 
+p <- plot.states.radar(ref.cd8, query = query.sub.byTT, min.cells = 30, genes4radar = c('LEF1',"IL7R", "TCF7","LMNA", "CCR7","GZMK", "FGFBP2",'FCGR3A','KLRG1', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'SLC4A10','TRAV1-2'), return = T)
+wrap_plots(p) + theme_bw()
 
 # Barplots
 n_pre <- length(table(query.sub.byTT$pre$patient))
 n_post <- length(table(query.sub.byTT$post$patient))
-c <- plot.statepred.composition(ref.cd8, query.sub.byTT$pre, metric = "percent", cols = mycols) + ylim(0,
-    55) + ggtitle(paste0("Pre treatment; n=", n_pre)) + theme_bw()
-d <- plot.statepred.composition(ref.cd8, query.sub.byTT$post, metric = "percent", cols = mycols) + ylim(0,
-    55) + ggtitle(paste0("Post-treatment; n=", n_post)) + theme_bw()
+c <- plot.statepred.composition(ref.cd8, query.sub.byTT$pre, metric = "percent") + ylim(0,
+    55) + ggtitle(paste0("Pre treatment; n=", n_pre)) + theme_bw() + RotatedAxis()
+d <- plot.statepred.composition(ref.cd8, query.sub.byTT$post, metric = "percent") + ylim(0,
+    55) + ggtitle(paste0("Post-treatment; n=", n_post)) + theme_bw() + RotatedAxis()
 c | d
 
 # We can now isolate Tpex. Let's check DEGs between pre and post treatment
@@ -1432,43 +1439,50 @@ Data are split between CD4 and CD8, have 2 timepoints (D8 and D28 after injectio
 
 ```{r}
 # CD8 ------------------------------------
-ref.cd8 <- readRDS(file="~/Dropbox/CSI/Datasets/projectTils/Human_CD8_TILs_atlas.rds")
+ref.cd8 <- readRDS(file="~/Dropbox/CSI/Datasets/projectTils/CD8T_human_ref_v0.2_ds.rds")
 
 load(file="~/Dropbox/CSI/Datasets/CAR_T_SUV39H1/SUV39H1_CAR_T_integrated_premerged_CD8s_cleaned.Rdata")
 car.cd8 <- suv.car.t.integrated.merged.timepoints.premerged.cd8s.cleaned
 rm(suv.car.t.integrated.merged.timepoints.premerged.cd8s.cleaned)
+DefaultAssay(car.cd8) <- "RNA"
+
+# Project CD8s with classifier
+car.cd8 <- ProjecTILs.classifier(car.cd8, ref = ref.cd8,  filter.cells = T, ncores = 1)
+table(car.cd8$functional.cluster)
+DimPlot(car.cd8, group.by = 'functional.cluster', cols = ref.cd8@misc$atlas.palette, label = T, order = T)
 
 # Project CD8s
-car.cd8 <- Run.ProjecTILs(car.cd8, ref = ref.cd8, filter.cells = T, skip.normalize = T, ncores = 4)
+car.cd8 <- Run.ProjecTILs(car.cd8, ref = ref.cd8,  filter.cells = T, skip.normalize = T, ncores = 6)
 table(car.cd8$functional.cluster)
-DimPlot(car.cd8, group.by = 'functional.cluster', cols = ref.cd8@misc$palette, label = T, order = T)
+DimPlot(car.cd8, group.by = 'functional.cluster', cols = ref.cd8@misc$atlas.palette, label = T, order = T)
 
 # Radar plots CD8
 car.cd8.list <- SplitObject(car.cd8, split.by = "genotype_timepoint")
-plot.states.radar(ref.cd8, query = car.cd8.list, min.cells = 5, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'SLC4A10','TRAV1-2'))
+p <- plot.states.radar(ref.cd8, query = car.cd8.list, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','KLRG1',"PDCD1",'ZNF683','ITGAE', "CRTAM", "CD200","GNG4","CRTAM","XCL1", "PKM","CXCL13", "HAVCR2","GZMB","PRF1","GZMA","TOX", "ENTPD1", 'SLC4A10','TRAV1-2'), return = T)
+wrap_plots(p) + theme_bw()
 
 # Barplot CD8
 pll <- list()
-pll[[1]] <- plot.statepred.composition(ref.cd8, query.list[["Responder"]], metric = "Percent") +
-    ggtitle("D8 Mock") + ylim(0, 52)+ theme_bw()+ RotatedAxis()
-pll[[2]] <- plot.statepred.composition(ref.cd8, query.list[["Non-responder"]], metric = "Percent") +
-    ggtitle("D8 KO") + ylim(0, 52) + theme_bw() + RotatedAxis()
-pll[[3]] <- plot.statepred.composition(ref.cd8, query.list[["Responder"]],  metric = "Percent") +
-    ggtitle("D28 Mock") + ylim(0, 52)+ theme_bw()+ RotatedAxis()
-pll[[4]] <- plot.statepred.composition(ref.cd8,  query.list[["Non-responder"]], metric = "Percent") +
-    ggtitle("D28 KO") + ylim(0, 52) + theme_bw() + RotatedAxis()
-grid.arrange(grobs = pll, ncol = 2, nrow = 2, widths = c(1.5, 1))
+pll[[1]] <- plot.statepred.composition(ref.cd8, car.cd8.list[["Mock D8"]], metric = "Percent") +
+    ggtitle("D8 Mock") + ylim(0, 80)+ theme_bw()+ RotatedAxis()
+pll[[2]] <- plot.statepred.composition(ref.cd8, car.cd8.list[["gSUV D8"]], metric = "Percent") +
+    ggtitle("D8 KO") + ylim(0, 80) + theme_bw() + RotatedAxis()
+pll[[3]] <- plot.statepred.composition(ref.cd8, car.cd8.list[["Mock D28"]],  metric = "Percent") +
+    ggtitle("D28 Mock") + ylim(0, 80)+ theme_bw()+ RotatedAxis()
+pll[[4]] <- plot.statepred.composition(ref.cd8,  car.cd8.list[["gSUV D28"]], metric = "Percent") +
+    ggtitle("D28 KO") + ylim(0, 80) + theme_bw() + RotatedAxis()
+grid.arrange(grobs = pll, ncol = 2, nrow = 2, widths = c(1, 1))
 
 
 # CD4 ------------------------------------
-ref.cd4 <- readRDS(file="~/Dropbox/CSI/Datasets/projectTils/Human_CD4_TILs_atlas.rds")
+ref.cd4 <- readRDS(file="~/Dropbox/CSI/reference_atlases/CD4TIL_human_ss_0.1.rds")
 
 load(file="~/Dropbox/CSI/Datasets/CAR_T_SUV39H1/SUV39H1_CAR_T_integrated_premerged_CD4s_cleaned.Rdata")
 car.cd4 <- suv.car.t.integrated.merged.timepoints.premerged.cd4s.cleaned
 rm(suv.car.t.integrated.merged.timepoints.premerged.cd4s.cleaned)
 
 # Project CD4s
-car.cd4 <- ProjecTILs.classifier(car.cd4, ref = ref.cd4, filter.cells = T, ncores = 1)
+car.cd4 <- ProjecTILs.classifier(car.cd4, ref = ref.cd4, split.by = "orig.ident", filter.cells = T, ncores = 1)
 table(car.cd4$functional.cluster)
 DimPlot(car.cd4, group.by = 'functional.cluster', cols = pals::glasbey(), label = T, order = T)
 
@@ -1487,6 +1501,12 @@ pll[[3]] <- plot.statepred.composition(ref.cd4, query.list[["Responder"]],  metr
 pll[[4]] <- plot.statepred.composition(ref.cd4, query.list[["Non-responder"]], metric = "Percent") +
     ggtitle("D28 KO") + ylim(0, 52) + theme_bw() + RotatedAxis()
 grid.arrange(grobs = pll, ncol = 2, nrow = 2, widths = c(1.5, 1))
+```
+
+radars
+
+```{r}
+plot.states.radar(ref.cd8, query = car.cd8, min.cells = 30, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'SLC4A10','TRAV1-2'))
 ```
 
 ## Mapping [Bigot et al. 2021](https://aacrjournals.org/cancerdiscovery/article/11/8/1938/666209/Splicing-Patterns-in-SF3B1-Mutated-Uveal-Melanoma)
@@ -1509,17 +1529,15 @@ table(UM2_3$functional.cluster)
 DimPlot(UM2_3, group.by = 'functional.cluster', cols = ref.cd8@misc$atlas.palette, label = T, order = T)
 
 # Radars UM1
-plot.states.radar(ref.cd8, query = UM1, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'SLC4A10','TRAV1-2'))
+plot.states.radar(ref.cd8, query = UM1, min.cells = 30, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'SLC4A10','TRAV1-2'))
 
 # Radars UM2_3
-plot.states.radar(ref.cd8, query = UM2_3,  min.cells = 5, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'SLC4A10','TRAV1-2'))
+plot.states.radar(ref.cd8, query = UM2_3,  min.cells = 30, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'SLC4A10','TRAV1-2'))
 ```
 
 ### Same but without TRM in the reference
 
 ```{r}
-ref.cd8.noTRM <- subset(ref.cd8, idents = "TRM", invert = T)
-
 # UM1
 UM1 <- ProjecTILs.classifier(UM1, ref = ref.cd8.noTRM, skip.normalize=TRUE,filter.cells = T, ncores = 4)
 table(UM1$functional.cluster)
