@@ -1,0 +1,296 @@
+---
+title: CD8 TIL projection uncover cells types hidden by transient gene programs
+subtitle: Examples on Activation and Cell Cycle gene programs 
+date: "`r Sys.Date()`"
+author: "P. Gueguen, M. Andreatta and S. Carmona"
+output:
+  rmdformats::readthedown:
+    self-contained: true
+    highlight: haddock
+    thumbnails: false
+    css: styles.css
+knit: (function(input_file, encoding) {
+  out_dir <- 'docs';
+  rmarkdown::render(input_file, encoding=encoding,
+  output_file=file.path(dirname(input_file), out_dir, 'Transient_gene_programs.html'))})
+---
+
+```{r, include=FALSE, fig.width=16, fig.height=12, warning=FALSE, message=FALSE}
+renv::restore()
+library(Seurat)
+library(tidyverse)
+library(scGate)
+library(STACAS)
+library(data.table)
+library(GEOquery)
+library(patchwork)
+library(ProjecTILs)
+library(gridExtra)
+library(ggrepel)
+library(scales)
+library(UCell)
+library(pheatmap)
+library(plotly)
+#options(future.globals.maxSize= 5000*1024^2)
+```
+
+## Background
+
+Cells responding to external cues can go into transient gene programs. In scRNA-seq data, clusters will form by the strongest variation component, which can be transient gene programs, and might not reflect the original, potentially more stable cell type.
+
+Among the main types of program that we see being upregulated are:
+
+-   Cell cycle, when cells go through division (eg. MCM5, TOP2A)
+
+-   IFN response, in response to IFN stimulation (eg. MX1, ISG15)
+
+-   HSP response, in response to stress (eg. HSPA1, HSPA2)
+
+-   Activation response, in response to activation signal, eg TCR engagement (eg. JUN, FOS)
+
+In two example, we will see how we can use reference-based projection to uncover the original cell types from activated and cycling cells.
+
+[First example: Activation program Yost et al. 2019]
+
+In [Yost et al. 2019](https://www.nature.com/articles/s41591-019-0522-3), the authors describe clonal replacement of tumor-specific T cells following PD-1 blockade using scRNA-seq data. The original annotation comprised a mixture of cell types (Naive, Memory etc) and cell states (Activated T, Activated / Exhausted).
+
+[Second example: Cycling cells program Gueguen et al. 2021]
+
+In [Gueguen et al. 2021](https://www.science.org/doi/10.1126/sciimmunol.abd5778), the authors describe two population of cycling cells: **CD4/8-MCM5** and **CD4/8-TOP2A**. As these cycling cells are a mix of CD4 and CD8 T cells, we will see first how we can isolate only CD8 from this mix of CD8/CD4 using the built-in scGate filtering included in the CD8 reference. We will then see if our reference-based approach [ProjecTILs](https://github.com/carmonalab/ProjecTILs) can help recover the original cell types annotation.
+
+## Loading the CD8 reference
+
+First let's load the CD8 TIL refence by downloading it from Figshare.
+
+```{r}
+# Load the reference
+options(timeout = max(900, getOption("timeout")))
+#download.file("https://figshare.com/ndownloader/files/38921366", destfile = "CD8T_human_ref_v1.rds")
+ref.cd8 <- load.reference.map("CD8T_human_ref_v1.rds")
+
+mycols <- ref.cd8@misc$atlas.palette
+
+# Plotting
+DimPlot(ref.cd8,  group.by = 'functional.cluster', label = T, repel = T, cols = mycols) + theme(aspect.ratio = 1)
+```
+
+We can see that the reference is composed only of what should only be stable cell types. Indeed, cells expressing highly transient gene programs (Cycling and IFN) were removed when constructing the reference.
+
+## First example: Activation program Yost et al. 2019
+
+### Load data
+
+First we need to load the data and append metadata from the original study, including UMAP coordinates.
+
+```{r}
+# Load data
+datadir <- "input/Yost/"
+cached.object <- paste0(datadir,"Yost.seurat.rds")
+if (!file.exists(cached.object)) {
+    library(GEOquery)
+    geo_acc <- "GSE123813"
+    
+    gse <- getGEO(geo_acc)
+    series <- paste0(geo_acc, "_series_matrix.txt.gz")
+    system(paste0("mkdir -p ", datadir))
+    getGEOSuppFiles(geo_acc, baseDir = datadir)
+    ## Load expression matrix and metadata
+    exp.mat <- read.delim(sprintf("%s/%s/GSE123813_bcc_scRNA_counts.txt.gz",
+        datadir, geo_acc), header = F, sep = "\t")
+    
+    query.object <- CreateSeuratObject(counts = exp.mat, project = "Yost", min.cells = 3, min.features = 50)
+    
+    meta <- read.delim(sprintf("%s/%s/GSE123813_bcc_all_metadata.txt.gz", datadir, geo_acc), header = T, sep = "\t")
+    meta.T <- read.delim(sprintf("%s/%s/GSE123813_bcc_tcell_metadata.txt.gz", datadir, geo_acc), header = T, sep = "\t")
+    response  <- read.csv(meta_response, header=T, sep=",")
+    
+    query.object <- AddMetaData(query.object, meta$patient, col.name="patient")
+    
+    rownames(meta) <- meta$cell.id
+    rownames(response) <- response$Patient
+    
+    meta.T.c <- meta.T$cluster
+    names(meta.T.c) <- meta.T$cell.id
+    
+    query.object <- AddMetaData(query.object, meta)
+    query.object <- AddMetaData(query.object, meta.T.c, col.name = "cluster")
+    
+    query.object@meta.data$Response <- response$Response[match(query.object$patient, response$Patient)]
+    
+    saveRDS(query.object, cached_seurat)
+
+} else {
+    query.object <- readRDS(cached.object)
+}
+```
+
+Now we can have a look at the original study annotation, including clusters. We can see that activation cluster (**CD8_act**) is patient specific, as it seems driven mainly by patient "`su008`", after receiving immunotherapy treatment.
+
+```{r, warning=FALSE}
+# Normalize data
+query.object <- NormalizeData(query.object)
+query.object <- ScaleData(query.object)
+
+# Setting up original UMAP space
+query.object@reductions[["umap"]] <- CreateDimReducObject(embeddings = cbind(query.object$UMAP1, query.object$UMAP2), key = "UMAP_", assay = DefaultAssay(query.object))
+DimPlot(query.object, reduction = 'umap', group.by = 'cluster', label = T)
+DimPlot(query.object, reduction = 'umap', group.by = 'patient', label = T, repel = T)
+DimPlot(query.object, reduction = 'umap', group.by = 'treatment')
+
+# Filter cells without patient ID to match paper annotation
+query.object<- query.object[,which(!is.na(query.object$patient))]
+```
+
+### Projection into the CD8 reference
+
+As this dataset is a mix between CD4 and CD8 T cells, we will keep the parameter `filter.cells` as TRUE.
+
+```{r, include=T, message=F, warning=F}
+# Mapping
+query.projected <- Run.ProjecTILs(query.object, ref.cd8, split.by = "patient", filter.cells = T, ncores = 4)
+```
+
+Let's check consistency between the original and the projected annotations.
+
+```{r, fig.width=5, fig.height=4}
+query.projected <- subset(query.projected, subset=cluster %in% c("CD8_act","CD8_eff","CD8_ex","CD8_ex_act","CD8_mem","Naive"))
+
+df <- table(query.projected$cluster, query.projected$functional.cluster)
+
+pheatmap(df, scale = 'row')
+```
+
+Annotations globally agree. Still, we can see that some clusters, including **CD8_act** cluster seems to be mapping into multiple clusters in our reference.
+
+### Projections split by original annotations
+
+To understand relationships between previous and our own annotation, we can split the projection by the original cluster annotation provided by the authors. In this case, we can see that **CD8_mem** are mainly mapped as Central memory cells (**CD8.CM**), while **CD8_act** are mapping into many different subtypes.
+
+```{r, fig.height=8, fig.width=15}
+query.bysub <- SplitObject(query.projected, split.by = "cluster")
+pll <- list()
+
+for (n in names(query.bysub)) {
+  x <- query.bysub[[n]]
+  pll[[n]] <- plot.projection(ref.cd8, x, linesize = 0.5, pointsize = 0) + ggtitle(n) +
+    theme(axis.title=element_blank(),
+        axis.text=element_blank(),
+        axis.ticks=element_blank(), aspect.ratio = 1)
+}
+wrap_plots(pll)
+
+ggsave("plots/Yost_projected_by_subtype.png", height=6, width=12)
+```
+
+We see that **CD8_act** cluster maps into multiple parts of the reference, as contrary to **CD8_eff** or **CD8_ex** for instance.
+
+### Radar to plots to check to assess quality
+
+```{r, fig.height=8, fig.width=15, warning=FALSE}
+genes4radar <-
+  c(
+    'LEF1',
+    "TCF7",
+    "CCR7",
+    "GZMK",
+    "FGFBP2",
+    'FCGR3A',
+    'KLRG1',
+    "PDCD1",
+    'ZNF683',
+    'ITGAE',
+    "CRTAM",
+    "CD200",
+    "HAVCR2",
+    "TOX",
+    "ENTPD1",
+    'SLC4A10',
+    'TRAV1-2'
+  )
+
+plot.states.radar(ref.cd8,
+                  query = query.bysub,
+                  min.cells = 0,
+                  genes4radar = genes4radar) 
+```
+
+```{r, fig.height=8, fig.width=15, eval=FALSE}
+# By subtype
+for (n in names(query.bysub)) {
+  pll <- plot.states.radar(ref.cd8, query = query.bysub[[n]], min.cells = 20,
+                  genes4radar = genes4radar, return.as.list = TRUE)
+  
+  p <- wrap_plots(pll) + plot_annotation(sprintf("Profiles for %s", n))
+  plot(p)
+  
+  ggsave(sprintf("plots/Yost_radars_by_subtype.%s.pdf", n), height=9, width=14)
+}
+```
+
+### Zoom on CD8_act in the original UMAP space
+
+Let's run ProjecTILs in classifier mode `(ProjecTILs.classifier)` to check the original UMAP space.
+
+```{r, message=FALSE, warning=F}
+query.object <- ProjecTILs.classifier(query.object, ref.cd8, split.by = "patient", filter.cells = T, ncores = 4)
+
+DimPlot(query.object, group.by = "functional.cluster", cols = mycols)
+```
+
+Now let's focus on the **CD8_act** cluster only.
+
+```{r}
+query.object.sub <- subset(query.object, subset = cluster == "CD8_act")
+DimPlot(query.object.sub, group.by = "functional.cluster", cols = mycols, repel = T, label = T)
+
+```
+
+```{r fig.width=10, fig.height=4}
+DefaultAssay(query.object.sub) <- 'RNA'
+FeaturePlot(query.object.sub, features = c('IL7R','FGFBP2','GZMK'), ncol = 3, pt.size = 0.5, order = T, cols = pals::coolwarm()) & NoLegend()
+```
+
+We see that in original reduced space, within the activated cluster, we had cell types from our reference, including CM, TEMRA and EM clusters (respectively high for IL7R, FGFBP2 and GZMK).
+
+## Second example: Cycling cells program Gueguen et al. 2021
+
+### Load data
+
+```{r, message=F, warning=F}
+gueguen.cd3 <- readRDS('~/Dropbox/CSI/Datasets/Gueguen2021/NSCLC_CD3_11tumors.Rds')
+gueguen.cd3$seurat_clusters <- Idents(gueguen.cd3)
+
+# Projection
+DefaultAssay(gueguen.cd3) <- "RNA"
+gueguen.cd3 <- ProjecTILs.classifier(gueguen.cd3, ref = ref.cd8, filter.cells = T, split.by = 'orig.ident', ncores = 6)
+table(gueguen.cd3$functional.cluster)
+DimPlot(gueguen.cd3, group.by = 'functional.cluster', order = T, cols = mycols, label = T, repel = T)
+```
+
+```{r, fig.width=15, fig.height=6}
+# Radar plots
+p <- plot.states.radar(ref.cd8, query = gueguen.cd3, min.cells = 10, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'TYROBP','KIR2DL1'), return = T) 
+wrap_plots(p) + theme_bw()
+```
+
+### Cycling analysis
+
+```{r}
+gueguen.cycling <- subset(gueguen.cd3, subset = seurat_clusters %in% c('CD4/8-TOP2A', "CD4/8-MCM5"))
+
+# Dimplot
+DimPlot(gueguen.cycling, group.by = 'functional.cluster', label = T, repel = T, cols = mycols)
+
+# barplot
+plot.statepred.composition(ref.cd8, gueguen.cycling, metric = "Percent") +
+    ggtitle("Cycling cells") + ylim(0, 75) + theme_bw() + RotatedAxis()
+```
+
+We can see that we can recover the original phenotype of the cycling cells, including Effector Memory (EM), Central Memory (CM), Exhausted (TEX), and Progenitor Exhausted (TPEX). Let's check the radar plots to see if they match the reference.
+
+```{r, fig.width=15, fig.height=8}
+# Radar plots
+plot.states.radar(ref.cd8, query = gueguen.cycling, min.cells = 10, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'TYROBP','KIR2DL1',"TOP2A","MCM5")) 
+```
+
+Indeed, the radars confirm that the annotation seems of good quality. Radar are good way to show that phenotypes match between the reference and the query, but they differ by the cycling genes (TOP2A and MCM5).

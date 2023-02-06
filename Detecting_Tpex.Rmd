@@ -1,0 +1,222 @@
+---
+title: Detecting CD8 Tpex with ProjecTILs
+date: "`r Sys.Date()`"
+author: "P. Gueguen, M. Andreatta and S. Carmona"
+output:
+  rmdformats::readthedown:
+    self-contained: true
+    highlight: haddock
+    thumbnails: false
+    css: styles.css
+knit: (function(input_file, encoding) {
+  out_dir <- 'docs';
+  rmarkdown::render(input_file, encoding=encoding,
+  output_file=file.path(dirname(input_file), out_dir, 'Detecting_Tpex.html'))})
+---
+
+In this tutorial, we will present how to use ProjecTILs to detect Tpex in public datasets that were not detecting them. This CD8 human TILs reference was built using mention [Nick Borcherding collection](https://github.com/ncborcherding/utility) of single-cell datasets from tumor-patients. The map consists of 11,021 high-quality single-cell transcriptomes from 20 samples covering 7 tumor types.
+
+The process and code to build the map can be found in [this Github repo](https://github.com/carmonalab/human_TIL_atlas).
+
+Briefly, this reference was built using highly curated CD8+ T cells from tumor-infiltrating patients, and integrated using [semi-supervised STACAS](https://carmonalab.github.io/STACAS.demo/STACAS.demo.html#semi-supervised-integration). Unsupervised clustered was performed on this integrated samples. Clusters were manually annotated with respect to classical immunology markers. Clusters were later downsampled to have at most 2000 cells per cluster. In our experience, this optimized cluster balance improve projection, as reported [here](https://www.biorxiv.org/content/10.1101/2023.01.25.525533v1.full.pdf) and [here](https://www.biorxiv.org/content/10.1101/2022.10.06.511156v2.full.pdf). Finally, this map was converted as a [ProjecTILs](https://github.com/carmonalab/ProjecTILs) reference. As this reference was constructed with tumor-infiltrating samples, it might not work perfectly when mapping other tissues, such as blood or DLN.
+
+## Progenitors exhauted (Tpex)
+
+Pioneering work in the murine lymphocytic choriomeningitis virus (LCMV) model has mapped the molecular and phenotypic profiles of CD8+ T cells with acute resolving and chronic infections revealing progenitors of exhausted T cells, defined by the expression of transcription factors, TOX and TCF1, which arise in the acute-phase of infection and sustain terminally exhausted subsets over the long-term.
+
+Except few studies ([Oliveira et al.](https://www.nature.com/articles/s41586-021-03704-y), [Magen et al.](https://www.biorxiv.org/content/10.1101/2022.06.22.497216v1.full), [Zheng et al.](https://www.science.org/doi/abs/10.1126/science.abe6474)). This subset have largely been well described in mouse but harder to detect in human.
+
+<details>
+
+<summary style="display:list-item"> Why doing projection?
+
+</summary>
+
+Projection allow to classify cells using a well curated `ProjecTILs` reference map.
+
+-   This method has the benefit of using the same cell types across project, which is highly beneficial when analyzing huge collections of datasets.
+
+-   This reference is also a way to annotate datasets only by stable cell types, and not transient cell states, like cell cycle or activation.
+
+-   Projection is robust to batch effects, like single-cell technologies or sequencing depth (for more information, please read ProjecTILs paper - [Andreatta et al. 2021](https://www.nature.com/articles/s41467-021-23324-4)).
+
+</details>
+
+<details>
+
+<summary style="display:list-item"> What happens if some cells are not covered by the reference?
+
+</summary>
+
+If some cells are not covered by the reference, they should be filtered-out (eg. CD4 T cells if the reference is CD8 T cells).
+
+By default, both `Run.ProjecTILs()` and `ProjecTILs.classifier()` have the parameter `filter.cells` set as `TRUE`. This means that cells out of reference will be filtered-out using the built-in [`scGate`](https://github.com/carmonalab/scGate) model. This model is stored in the slot misc of the reference [`Seurat`](https://github.com/satijalab/seurat) object: `ref@misc$scGate`. You can custom this filtering by amending this slot using [`scGate`](https://github.com/carmonalab/scGate) grammar.
+
+</details>
+
+</details>
+
+
+
+```{r, include=FALSE, fig.width=16, fig.height=12, warning=FALSE, message=FALSE}
+renv::restore()
+library(Seurat)
+library(tidyverse)
+library(scGate)
+library(STACAS)
+library(data.table)
+library(GEOquery)
+library(patchwork)
+library(ProjecTILs)
+library(gridExtra)
+library(SignatuR)
+library(ggrepel)
+library(scales)
+library(UCell)
+library(pheatmap)
+library(EnhancedVolcano)
+library(plotly)
+#options(future.globals.maxSize= 5000*1024^2)
+```
+
+## Human CD8 TIL reference
+
+First, let's have a look at the reference marker genes.
+
+```{r, message = F, warning=FALSE, fig.height=10, fig.width=7}
+# Load the reference
+options(timeout = max(900, getOption("timeout")))
+#download.file("https://figshare.com/ndownloader/files/38921366", destfile = "CD8T_human_ref_v1.rds")
+ref.cd8 <- load.reference.map("CD8T_human_ref_v1.rds")
+
+# Setup colors
+mycols <- ref.cd8@misc$atlas.palette
+
+# Compute DEGs
+DefaultAssay(ref.cd8) <- "RNA"
+ref.cd8 <- NormalizeData(ref.cd8)
+markers <- FindAllMarkers(object = ref.cd8, only.pos = TRUE, assay = "RNA")
+
+# Remove TCR genes
+tcr.genes <- SignatuR::GetSignature(SignatuR$Hs$Compartments$TCR)
+markers <- markers %>% filter(!gene %in% unname(tcr.genes))
+markers %>% group_by(cluster) %>% top_n(n = 3, wt = avg_log2FC) -> top3
+
+# Plot heatmap
+VlnPlot(ref.cd8, assay = "RNA", features  = top3$gene, cols = mycols, stack = T, flip = T, fill.by = "ident") + NoLegend()
+```
+
+## Detecting Tpex in [Gueguen et al. 2021](https://www.science.org/doi/10.1126/sciimmunol.abd5778)
+
+### Setup data
+
+```{r, message=F, warning=F}
+gueguen.cd3 <- readRDS('~/Dropbox/CSI/Datasets/Gueguen2021/NSCLC_CD3_11tumors.Rds')
+gueguen.cd3$seurat_clusters <- Idents(gueguen.cd3)
+```
+
+### Projection
+
+```{r, message=F, warning=F}
+# Projection
+DefaultAssay(gueguen.cd3) <- "RNA"
+gueguen.cd3 <- ProjecTILs.classifier(gueguen.cd3, ref = ref.cd8, filter.cells = T, split.by = 'orig.ident', ncores = 6)
+table(gueguen.cd3$functional.cluster)
+DimPlot(gueguen.cd3, order = T,  label = T, repel = T) 
+DimPlot(gueguen.cd3, group.by = 'functional.cluster', order = T, cols = mycols, label = T, repel = T)
+```
+
+```{r, fig.height=8, fig.width=15}
+# Radar plots
+p <- plot.states.radar(ref.cd8, query = gueguen.cd3, min.cells = 10, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'TYROBP','KIR2DL1'), return = T) 
+wrap_plots(p) + theme_bw()
+```
+
+
+We can see that the previously homogeneous cluster CD8-LAYN seems to be in fact composed of two subsets: CD8.TEX and CD8.TPEX
+
+<details>
+
+<summary style="display:list-item"> How to assess quality/robustness of mapping?
+</summary>
+
+It can be hard to make the call between cells modified, adn cells plainly wrongly mapped. We usually recommend to assess maping consistency by checking consistency among top markers. If the query seems quite different from the reference, we recommand to understand DEGs between the reference and the query, for each cell type of interest.
+
+</details>
+
+## Detecting Tpex in [Yost et al. 2019](https://www.nature.com/articles/s41591-019-0522-3)
+
+### Setup data
+
+```{r}
+# Load data
+datadir <- "input/Yost/"
+cached.object <- paste0(datadir,"Yost.seurat.rds")
+if (!file.exists(cached.object)) {
+    library(GEOquery)
+    geo_acc <- "GSE123813"
+    
+    gse <- getGEO(geo_acc)
+    series <- paste0(geo_acc, "_series_matrix.txt.gz")
+    system(paste0("mkdir -p ", datadir))
+    getGEOSuppFiles(geo_acc, baseDir = datadir)
+    ## Load expression matrix and metadata
+    exp.mat <- read.delim(sprintf("%s/%s/GSE123813_bcc_scRNA_counts.txt.gz",
+        datadir, geo_acc), header = F, sep = "\t")
+    
+    yost.cd3 <- CreateSeuratObject(counts = exp.mat, project = "Yost", min.cells = 3, min.features = 50)
+    
+    meta <- read.delim(sprintf("%s/%s/GSE123813_bcc_all_metadata.txt.gz", datadir, geo_acc), header = T, sep = "\t")
+    meta.T <- read.delim(sprintf("%s/%s/GSE123813_bcc_tcell_metadata.txt.gz", datadir, geo_acc), header = T, sep = "\t")
+    response  <- read.csv(meta_response, header=T, sep=",")
+    
+    yost.cd3 <- AddMetaData(yost.cd3, meta$patient, col.name="patient")
+    
+    rownames(meta) <- meta$cell.id
+    rownames(response) <- response$Patient
+    
+    meta.T.c <- meta.T$cluster
+    names(meta.T.c) <- meta.T$cell.id
+    
+    yost.cd3 <- AddMetaData(yost.cd3, meta)
+    yost.cd3 <- AddMetaData(yost.cd3, meta.T.c, col.name = "cluster")
+    
+    yost.cd3@meta.data$Response <- response$Response[match(yost.cd3$patient, response$Patient)]
+    
+    saveRDS(yost.cd3, cached_seurat)
+
+} else {
+    yost.cd3 <- readRDS(cached.object)
+}
+
+# Normalize data
+yost.cd3 <- NormalizeData(yost.cd3)
+yost.cd3 <- ScaleData(yost.cd3)
+
+# Setting up original UMAP space
+yost.cd3@reductions[["umap"]] <- CreateDimReducObject(embeddings = cbind(yost.cd3$UMAP1, yost.cd3$UMAP2), key = "UMAP_", assay = DefaultAssay(yost.cd3))
+DimPlot(yost.cd3, reduction = 'umap', group.by = 'cluster', label = T)
+DimPlot(yost.cd3, reduction = 'umap', group.by = 'patient', label = T, repel = T)
+
+# Filter cells without patient ID to match paper annotation
+yost.cd3<- yost.cd3[,which(!is.na(yost.cd3$patient))]
+```
+
+### Projection
+
+```{r, message=F, warning=F}
+DefaultAssay(yost.cd3) <- "RNA"
+yost.cd3 <- ProjecTILs.classifier(yost.cd3, ref = ref.cd8, filter.cells = T, split.by = 'patient', ncores = 6)
+table(yost.cd3$functional.cluster)
+
+DimPlot(yost.cd3, group.by = 'functional.cluster', order = T, cols = mycols, label = T, repel = T)
+```
+
+We indeed detect TPEX, next to TEX clusters, which make sense. Let's check how the expression profiles look.
+
+```{r, fig.height=8, fig.width=15}
+# Radar plots
+p <- plot.states.radar(ref.cd8, query = yost.cd3, min.cells = 10, genes4radar = c('LEF1', "TCF7", "CCR7", "GZMK", "FGFBP2",'FCGR3A','ZNF683','ITGAE', "CRTAM", "CD200",'GNG4', "HAVCR2", "TOX", "ENTPD1", 'TYROBP','KIR2DL1'), return = T) 
+wrap_plots(p) + theme_bw()
+```
+We can see that in the Yost et al., CD8.TPEX can be found with profiles matching the reference.
