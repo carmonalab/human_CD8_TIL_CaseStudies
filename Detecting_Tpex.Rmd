@@ -92,6 +92,14 @@ markers %>% group_by(cluster) %>% top_n(n = 3, wt = avg_log2FC) -> top3
 DimPlot(ref.cd8,  group.by = 'functional.cluster', label = T, repel = T, cols = mycols) + theme(aspect.ratio = 1)
 ```
 
+Let's display 6 positive and 6 negative TPEX markers.
+
+```{r fig.width=10, fig.height=12}
+DefaultAssay(ref.cd8) <- 'RNA'
+FeaturePlot(ref.cd8, features = c('TCF7','XCL1','XCL2',"CXCL13","TOX","CRTAM","GZMB","NKG7","CCL5","HAVCR2","PRF1","GZMA"), ncol = 3, pt.size = 0.5, order = T, cols = pals::coolwarm()) & NoLegend()
+```
+
+
 Here are the different T cell subsets defined in the map:
 
 -   **CD8.NaiveLike:** Antigen-naive T cells
@@ -200,7 +208,7 @@ table(Yost.cd3$functional.cluster)
 DimPlot(Yost.cd3, group.by = 'functional.cluster', order = T, cols = mycols, label = T, repel = T)
 ```
 
-We indeed detect TPEX, next to TEX clusters, which make sense. Let's check globally how the expression profiles look.
+We indeed detect TPEX. Let's check globally how the expression profiles look.
 
 ```{r, fig.height=8, fig.width=15}
 # Radar plots
