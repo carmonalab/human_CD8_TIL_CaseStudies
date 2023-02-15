@@ -1,0 +1,109 @@
+---
+title: Uncovering activation signal in Yost et al.
+date: "`r Sys.Date()`"
+author: "P. Gueguen, M. Andreatta and S. Carmona"
+output:
+  rmdformats::readthedown:
+    self-contained: true
+    highlight: haddock
+    thumbnails: false
+    css: styles.css
+knit: (function(input_file, encoding) {
+  out_dir <- 'docs';
+  rmarkdown::render(input_file, encoding=encoding,
+  output_file=file.path(dirname(input_file), out_dir, 'Activation_Yost.html'))})
+---
+
+```{r, include=FALSE, warning=FALSE, message=FALSE}
+renv::restore()
+library(Seurat)
+library(tidyverse)
+library(scGate)
+library(STACAS)
+library(data.table)
+library(GEOquery)
+library(patchwork)
+library(ProjecTILs)
+library(gridExtra)
+library(SignatuR)
+library(ggrepel)
+library(scales)
+library(UCell)
+library(pheatmap)
+library(EnhancedVolcano)
+library(plotly)
+#options(future.globals.maxSize= 5000*1024^2)
+```
+
+# Load the reference
+```{r, message = F, warning=FALSE}
+# Load the reference
+options(timeout = max(900, getOption("timeout")))
+#download.file("https://figshare.com/ndownloader/files/38921366", destfile = "CD8T_human_ref_v1.rds")
+ref.cd8 <- load.reference.map("CD8T_human_ref_v1.rds")
+
+# Setup colors
+mycols <- ref.cd8@misc$atlas.palette
+
+# DimPlot
+DimPlot(ref.cd8,  group.by = 'functional.cluster', label = T, repel = T, cols = mycols) + theme(aspect.ratio = 1)
+```
+
+# Setup data
+
+Data was extracted from [Yost et al. 2019](https://www.nature.com/articles/s41591-019-0522-3).
+```{r}
+# Load data
+#download.file("https://figshare.com/ndownloader/files/39109277", destfile = "Yost.cd3.Rds")
+Yost.cd3 <- readRDS("Yost.cd3.Rds")
+
+# Normalize data
+Yost.cd3 <- NormalizeData(Yost.cd3)
+Yost.cd3 <- ScaleData(Yost.cd3)
+
+# DimPlots
+DimPlot(Yost.cd3, reduction = 'umap', group.by = 'cluster', label = T)
+DimPlot(Yost.cd3, reduction = 'umap', group.by = 'patient', label = T, repel = T)
+```
+
+Now we can have a look at the original study annotation, including clusters. We can see that activation cluster (CD8_act) is patient specific, as it seems driven mainly by patient **su008** after receiving immunotherapy treatment.
+
+# Projection
+
+As this dataset is a mix between CD4 and CD8 T cells, we will keep the parameter `filter.cells` as TRUE to keep only CD8+ T cells.
+
+```{r, message=F, warning=F}
+DefaultAssay(Yost.cd3) <- "RNA"
+Yost.cd3 <- ProjecTILs.classifier(Yost.cd3, ref = ref.cd8, filter.cells = T, split.by = 'patient', ncores = 6)
+table(Yost.cd3$functional.cluster)
+
+DimPlot(Yost.cd3, group.by = 'functional.cluster', order = T, cols = mycols, label = T, repel = T)
+```
+
+We can see that in Yost et al. dataset, CD8.TPEX can be found with profiles matching the reference. TPEX are found scattered all over the original UMAP space. This is because activation signals and other confounding factors were contributing to defining UMAP space. 
+
+This is especially true for the **CD8_act** cluster, where we have many cell types projected. Let's confirm that we can retrieve our reference clusters on what seems to be a highly heterogeneous subset.
+
+# Subset example : **CD8_act** cluster
+
+This cluster is composed of cells driven by their activation signal. One benefit of projection is to overcome these very strong gene programs and focus on the underlying cellular identity.
+
+```{r, fig.width=15, fig.height=5}
+Yost.cd3.sub <- subset(Yost.cd3, subset = cluster == "CD8_act")
+DimPlot(Yost.cd3.sub, group.by = "cluster", repel = T, label = T) + DimPlot(Yost.cd3.sub, group.by = "functional.cluster", cols = mycols, repel = T, label = T)
+```
+
+```{r fig.width=10, fig.height=4}
+DefaultAssay(Yost.cd3.sub) <- 'RNA'
+FeaturePlot(Yost.cd3.sub, features = c('IL7R','FGFBP2','GZMK'), ncol = 3, pt.size = 0.5, order = T, cols = pals::coolwarm()) & NoLegend()
+```
+
+We see that in original reduced space, within the activated cluster, we recover cell types from our CD8 reference, including CM, TEMRA and EM clusters (respectively high for IL7R, FGFBP2 and GZMK). If you are interested in recovering cell types hidden by transient cell states, you can read more in the [corresponding tutorial](https://carmonalab.github.io/human_CD8_TIL_CaseStudies/Transient_gene_programs.html).
+
+<details><summary style="display:list-item"> Session Info </summary>
+
+```{r}
+sessionInfo()
+```
+
+</details>
