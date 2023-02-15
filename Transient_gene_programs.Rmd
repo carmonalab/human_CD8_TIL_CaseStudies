@@ -56,7 +56,7 @@ These are among the main types of program that classically are being upregulated
 
 Note: while some programs are clearly transient (like the cell cycle), some programs might be more permanent / epigenetically fixed. The distinction between transient and permanent might be harder for some programs, like tissue-residency. We argue here than having a well-curated reference, free from many clearly transient gene programs, will help in distinguishing transient from more stable cell states.
 
-Here we will see how we use reference-based projection to uncover the original cell types from **IFN-activated**, **Cycling** and **Tissue-resident** cells using data from [Gueguen et al. 2021](https://www.science.org/doi/10.1126/sciimmunol.abd5778).
+Here we will see how we use reference-based projection to uncover the original cell types from  **Cycling**, **IFN-activated** and **Tissue-resident** cells using data from [Gueguen et al. 2021](https://www.science.org/doi/10.1126/sciimmunol.abd5778).
 
 <details>
 
@@ -258,13 +258,13 @@ plot.statepred.composition(ref.cd8, gueguen.cycling, metric = "Percent") +
     ggtitle("Cycling cells") + ylim(0, 75) + theme_bw() + RotatedAxis()
 ```
 
-Let's check radars plots to confirm identities.
+Let's check radars plots to confirm identities, where we included some markers genes for cell cycle: TOP2A, MCM5 and MCM3.
 
 ```{r, fig.height=8, fig.width=15}
 plot.states.radar(ref = ref.cd8, query = gueguen.cycling, labels.col = 'functional.cluster', min.cells = 5, genes4radar = c('IL7R','LEF1', "TCF7","CCR7","KLF2","GZMK","FCGR3A","FGFBP2","XCL1","KLRB1",'TOP2A','MCM5','MCM3'))
 ```
 
-Radar plots look good. It seems that we have indeed less differentiated cells in the cycling compartment (Central Memory and effector memory). Projection seems more robust than Seurat label transfer to uncover cell types hidden behind transient gene programs.
+Radar plots look good. It seems that we have indeed less differentiated cells in the cycling compartment (Central Memory and Effector Memory). Projection seems more robust than Seurat label transfer to uncover cell types hidden behind transient gene programs.
 
 <details> <summary style="display:list-item">Session Info</summary>
 
