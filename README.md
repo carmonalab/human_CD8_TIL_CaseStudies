@@ -3,10 +3,10 @@ Projection example using a human CD8 TIL reference map. The pipeline to build th
 
 # Tutorial to use this reference:
 
-### Detecting Tpex:
+### Detecting Tpex
 - https://carmonalab.github.io/ProjecTILs.demo/Detecting_Tpex_CD8_reference.html
 
-### Recovering cell types from cell states clusters (eg, cycling, IFN, tissue-residency):
+### Recovering cell types from cell states clusters (eg, cycling, IFN, tissue-residency)
 - https://carmonalab.github.io/ProjecTILs.demo/Transient_gene_programs.html
 
 ### Uncovering activation signal in Yost et al. 
