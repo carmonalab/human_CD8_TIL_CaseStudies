@@ -36,6 +36,7 @@ library(plotly)
 ```
 
 # Load the reference
+
 ```{r, message = F, warning=FALSE}
 # Load the reference
 options(timeout = max(900, getOption("timeout")))
@@ -51,7 +52,8 @@ DimPlot(ref.cd8,  group.by = 'functional.cluster', label = T, repel = T, cols = 
 
 # Setup data
 
-Data were extracted from [Yost et al. 2019](https://www.nature.com/articles/s41591-019-0522-3).
+Data were extracted from [Yost et al. 2019](https://www.nature.com/articles/s41591-019-0522-3) and uploaded on Figshare.
+
 ```{r}
 # Load data
 #download.file("https://figshare.com/ndownloader/files/39109277", destfile = "Yost.cd3.Rds")
@@ -80,13 +82,13 @@ table(Yost.cd3$functional.cluster)
 DimPlot(Yost.cd3, group.by = 'functional.cluster', order = T, cols = mycols, label = T, repel = T)
 ```
 
-We can see that in Yost et al. dataset, CD8.TPEX can be found with profiles matching the reference. TPEX are found scattered all over the original UMAP space. This is because activation signals and other confounding factors were contributing to defining UMAP space. 
+We can see that activation signal is contributing to defining UMAP space.
 
-This is especially true for the **CD8_act** cluster, where we have many cell types projected. Let's confirm that we can retrieve our reference clusters on what seems to be a highly heterogeneous subset.
+In the **CD8_act** cluster, which is mainly patient specific, we have many cell types projected. Let's confirm that we can retrieve our reference clusters behind the activation signal.
 
-# Subset example : **CD8_act** cluster
+# Focus on the activated (**CD8_act)** cluster
 
-This cluster is composed of cells driven by their activation signal. One benefit of projection is to overcome these very strong gene programs and focus on the underlying cellular identity.
+The cluster **CD8_act** is composed of cells driven by their activation signal. One benefit of projection is to overcome these strong gene programs and focus on the underlying cellular identity.
 
 ```{r, fig.width=15, fig.height=5}
 Yost.cd3.sub <- subset(Yost.cd3, subset = cluster == "CD8_act")
@@ -98,9 +100,15 @@ DefaultAssay(Yost.cd3.sub) <- 'RNA'
 FeaturePlot(Yost.cd3.sub, features = c('IL7R','FGFBP2','GZMK'), ncol = 3, pt.size = 0.5, order = T, cols = pals::coolwarm()) & NoLegend()
 ```
 
-We see that in the original reduced space, within the activated cluster, we recover cell types from our CD8 reference, including CM, TEMRA and EM clusters (respectively high for IL7R, FGFBP2 and GZMK). If you are interested in recovering cell types hidden by transient cell states, you can read more in the [corresponding tutorial](https://carmonalab.github.io/human_CD8_TIL_CaseStudies/Transient_gene_programs.html).
+We see that in the original reduced space, within the activated cluster, we recover cell types from our CD8 reference, including CM, TEMRA and EM clusters (respectively high for IL7R, FGFBP2 and GZMK). If you are interested in recovering cell types hidden by other transient cell states, you can read more in the [corresponding tutorial](https://carmonalab.github.io/human_CD8_TIL_CaseStudies/Transient_gene_programs.html).
 
-<details><summary style="display:list-item"> Session Info </summary>
+<details>
+
+<summary style="display:list-item">
+
+Session Info
+
+</summary>
 
 ```{r}
 sessionInfo()

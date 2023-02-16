@@ -89,7 +89,7 @@ mycols <- ref.cd8@misc$atlas.palette
 DimPlot(ref.cd8,  group.by = 'functional.cluster', label = T, repel = T, cols = mycols) + theme(aspect.ratio = 1)
 ```
 
-We see that the reference is composed only of what should only be stable cell types. Indeed, cells expressing highly transient gene programs (Cycling and IFN) were removed when constructing the reference.
+We see that the reference is composed only of stable cell types. Indeed, cells expressing highly transient gene programs (Cycling and IFN) were removed when constructing the reference. HSP / activation-high cells were removed by the stringent mitochondrial gene filter applied.
 
 ## Load Gueguen et al. data
 
@@ -104,9 +104,9 @@ DimPlot(gueguen.cd3, order = T,  label = T, repel = T)
 
 # Projection using reference map
 
-The first step is to project using [ProjecTILs](https://github.com/carmonalab/ProjecTILs) `ProjecTILs.classifier` function. This mode will give us the labels while keeping the original UMAP embeddings.
+The first step is to project using [ProjecTILs](https://github.com/carmonalab/ProjecTILs) `ProjecTILs.classifier` function. This projection mode will give us the labels while keeping the original UMAP embeddings.
 
-```{r, message=F, warning=F}
+```{r, message=F, warning=F, fig.height=5, fig.width=8}
 # Projection
 DefaultAssay(gueguen.cd3) <- "RNA"
 gueguen.cd3 <- ProjecTILs.classifier(gueguen.cd3, ref = ref.cd8, filter.cells = T, split.by = 'orig.ident', ncores = 6)
@@ -140,7 +140,7 @@ signatures[["IFN"]] <- c("ISG15","IFI6","IFI44L","MX1")
 signatures[["Tissue_Resident"]] <-  c("ITGAE")
 ```
 
-Now let's add the scores using `UCell`.
+Now let's compute the scores using `UCell`.
 
 ```{r, eval=T}
 gueguen.cd3 <- AddModuleScore_UCell(gueguen.cd3, features = signatures, ncores = 8,
@@ -152,9 +152,7 @@ FeaturePlot(gueguen.cd3, features = paste0(names(signatures), "_UCell"),
     order = T, pt.size = 0.3) & scale_color_paletteer_c("pals::coolwarm") 
 ```
 
-We see that these signatures correlate with their annotation of the original paper.
-
-Now, let's check signatures scores distribution to decide which threshold to put to distinguish negative/positive cells.
+We see that these signatures correlate with the annotation of the original paper. It's especially clear for the Cycling and IFN signals, that were largely contained into their own cluster (CD4/8-MCM5, CD4/8-TOP2A clusters for cycling, and CD4/8-ISG15 cluster for IFN).
 
 <details>
 
@@ -164,6 +162,8 @@ Signatures scores distributions
 
 </summary>
 
+We can check signatures scores distribution to decide which threshold to put to distinguish negative/positive cells. Here we will select the value of 0.2.
+
 ```{r, message=FALSE, warning=F, fig.width=10, fig.height=10}
 qplot(gueguen.cd3$cellCycle.G1S_UCell, main = "G1S-Cycling") +
     qplot(gueguen.cd3$cellCycle.G2M_UCell, main = "G2M-Cycling") + qplot(gueguen.cd3$IFN_UCell, main = "IFN") + qplot(gueguen.cd3$Tissue_Resident_UCell, main = "Tissue Resident") & theme_bw()
@@ -171,26 +171,26 @@ qplot(gueguen.cd3$cellCycle.G1S_UCell, main = "G1S-Cycling") +
 
 </details>
 
+Using `UCell` scores, we can split the data into high and low for each signature. Let's do the test here with the G1S-cycling signature.
+
 ```{r, fig.width=12, fig.height=5}
 # subset resident high cells in the CD8 reference
-resident.high <- subset(gueguen.cd3, subset = Tissue_Resident_UCell > 0.2)
-resident.low <- subset(gueguen.cd3, subset = Tissue_Resident_UCell <= 0.2)
+cycling.G1S.high <- subset(gueguen.cd3, subset = cellCycle.G1S_UCell > 0.2)
+cycling.G1S.low <- subset(gueguen.cd3, subset = cellCycle.G1S_UCell <= 0.2)
 
 # Set list
-resident.list <- list(resident.low,resident.high)
-names(resident.list) <- c("resident.low","resident.high")
+cycling.G1S.list <- list(cycling.G1S.low,cycling.G1S.high)
+names(cycling.G1S.list) <- c("cycling.G1S.low","cycling.G1S.high")
 ```
 
 ```{r, fig.height=8, fig.width=15}
 # Radars to check differences between resident / non resident
-plot.states.radar(ref = ref.cd8, query = resident.list, labels.col = 'functional.cluster', min.cells = 5, genes4radar = c("TCF7","CCR7","KLF2","GZMK","LMNA","FCGR3A","FGFBP2","XCL1","KLRB1", 'ZNF683',"ITGAE", 'ITGA1')) 
+plot.states.radar(ref = ref.cd8, query = cycling.G1S.list, labels.col = 'functional.cluster', min.cells = 5, genes4radar = c("SELL","LEF1","TCF7","CCR7","KLF2","GZMK", "GZMA", "FCGR3A","FGFBP2","XCL1","XCL2", "KLRB1",'MCM5',"MCM3","TOP2A")) 
 ```
 
-Resident-high and resident-low cells display the same overall phenotypes, but differ in their expression of key resident genes, upregulated when cells home within tissue, such as integrins (ITGAE, ITGA1) or the transcription factor HOBIT (ZNF683).
+Cycling-G1S high and Cycling-G1S low cells display the same overall phenotypes, but differ in their expression of key cycling genes, upregulated when cells start to cycle, such as MCM5, MCM3 and TOP2A.
 
-Indeed, the radars confirm that the annotation seems of good quality. Radar plots are a good way to show how phenotypes match between the reference and the query, but they differ by the resident genes (ZNF683, ITGA1, ITGAE and CXCR6). We also confirm that the cluster CD8-XCL1, originally identified as an early-precursors, indeed matches well the phenotype of Central Memory cells, while still being high for tissue-residency signal.
-
-By looking at the UCell scores distribution, we categorised the cells by putting a UCell score threshold of 0.2.
+Now we can do this for the 4 signatures that we selected at the beginning.
 
 ```{r, include=FALSE}
 # Show as discrete categories instead (by defining a threshold on the UCell scores)
@@ -217,11 +217,11 @@ pll[[x]] <- plot(ggplot(data, aes_string(x = "functional.cluster", y = "Frequenc
 wrap_plots(pll, guides = "collect")
 ```
 
-As previously shown, CD8.TEX and CD8.TPEX are the most cycling, resident and IFN-responding subsets. For the IFN signal, results are inconsistent between `UCell` signature scores and projected clustes. Results will vary depending on the signatures chosen, the UCell threshold chosen, as well as the clustering resolution.
+As previously shown, CD8.TEX and CD8.TPEX are the most cycling, resident and IFN-responding subsets. Results will vary depending on the signatures chosen, the UCell threshold chosen.
 
 # Upset plot to check program co-occurences
 
-Let's focus on the CD8.TEX population, and see how the different gene programs relate using a UpSet plot.
+Let's focus on the CD8.TEX population, and see how the different gene programs relate using a UpSet plot, using [UpSetR](https://github.com/hms-dbmi/UpSetR) package.
 
 ```{r}
 gueguen.cd3.TEX <- subset(gueguen.cd3, subset = functional.cluster == "CD8.TEX")
@@ -235,7 +235,7 @@ upset(fromList(listInput), order.by = "freq")
 grid.text("CD8.TEX gene programs overlap",x = 0.65, y=0.95, gp=gpar(fontsize=12))
 ```
 
-We can see that in CD8.TEX, broadly half of the IFN high cells are also high for the tissue-residency program. This should be explored further.
+We can see that in CD8.TEX, broadly half of the IFN high cells are also high for the tissue-residency program.
 
 # Comparison with the original annotation
 
@@ -252,7 +252,7 @@ gueguen.cycling <- subset(gueguen.cd3, subset = seurat_clusters %in% c('CD4/8-TO
 DimPlot(gueguen.cycling, group.by = 'functional.cluster', label = T, repel = T, cols = mycols)
 ```
 
-Clusters proportions in cycling
+We can have a look at clusters proportions in the original cycling clusters.
 
 ```{r}
 plot.statepred.composition(ref.cd8, gueguen.cycling, metric = "Percent") +
@@ -262,7 +262,7 @@ plot.statepred.composition(ref.cd8, gueguen.cycling, metric = "Percent") +
 Let's check radar plots to confirm identities, where we included some markers genes for cell cycle: TOP2A, MCM5 and MCM3.
 
 ```{r, fig.height=8, fig.width=15}
-plot.states.radar(ref = ref.cd8, query = gueguen.cycling, labels.col = 'functional.cluster', min.cells = 5, genes4radar = c('IL7R','LEF1', "TCF7","CCR7","KLF2","GZMK","FCGR3A","FGFBP2","XCL1","KLRB1",'TOP2A','MCM5','MCM3'))
+plot.states.radar(ref = ref.cd8, query = gueguen.cycling, labels.col = 'functional.cluster', min.cells = 5, genes4radar = c("SELL","LEF1","TCF7","CCR7","KLF2","GZMK", "GZMA", "FCGR3A","FGFBP2","XCL1","XCL2", "KLRB1",'MCM5',"MCM3","TOP2A"))
 ```
 
 The radar plots match well between the reference and the query. It seems that we have indeed less differentiated cells in the cycling compartment (Central Memory and Effector Memory). Projection seems more robust than Seurat label transfer to uncover cell types hidden behind transient gene programs.
