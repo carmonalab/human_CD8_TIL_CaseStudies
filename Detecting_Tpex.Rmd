@@ -14,7 +14,7 @@ knit: (function(input_file, encoding) {
   output_file=file.path(dirname(input_file), out_dir, 'Detecting_Tpex.html'))})
 ---
 
-In this tutorial, we will present how to use ProjecTILs to detect Tpex in public datasets that were not detecting them. This CD8 human TILs reference was built using [Nick Borcherding collection](https://github.com/ncborcherding/utility) of single-cell datasets from tumor-patients. The map consists of 11,021 high-quality single-cell transcriptomes from 20 samples covering 7 tumor types.
+In this tutorial, we will present how to use ProjecTILs to detect Tpex in public datasets that were not detecting them. This CD8 human TILs reference was built using [Nick Borcherding collection](https://github.com/ncborcherding/utility) of single-cell datasets from tumor patients. The map consists of 11,021 high-quality single-cell transcriptomes from 20 samples, covering 7 tumor types.
 
 The process and code to build the map can be found in [this Github repo](https://github.com/carmonalab/human_TIL_atlas_construction).
 
@@ -22,13 +22,13 @@ Briefly, this reference was built using curated CD8+ T cells from 20 tumor-infil
 
 <details><summary style="display:list-item">Why doing projection? </summary>
 
-Projection allow to classify cells using a well curated `ProjecTILs` reference map.
+Projection classifies cells using a well curated `ProjecTILs` reference map.
 
 -   This method has the benefit of using the same cell types across projects, which is especially beneficial when analyzing huge collections of datasets.
 
 -   This reference is also a way to annotate datasets only by stable cell types, and not transient cell states, like cell cycle or activation.
 
--   Results will be comparable across conditions, as there is little manual tuning. For instance, there is no need for steps which can have a high impact, such as selection of highly variable genes.
+-   Results will be comparable across conditions, as there is little manual tuning. For instance, there is no need for steps that can have a high impact, such as the selection of highly variable genes.
 
 -   Projection is robust to batch effects, like single-cell technologies or sequencing depth (for more information, please read ProjecTILs paper - [Andreatta et al. 2021](https://www.nature.com/articles/s41467-021-23324-4)).
 
@@ -122,9 +122,9 @@ VlnPlot(ref.cd8, assay = "RNA", features  = top3$gene, cols = mycols, stack = T,
 
 # Progenitors exhauted (Tpex)
 
-Pioneering work in the murine lymphocytic choriomeningitis virus (LCMV) model has mapped the molecular and phenotypic profiles of CD8+ T cells, revealing progenitors of exhausted T cells (TPEX), defined by the expression of transcription factors, TOX and TCF1. These cells which arise in the acute-phase of infection and sustain terminally exhausted subsets over the long-term. As they are thought to renew the pool of terminally exhausted cells, an increasing number of reports show that this population is of primary importance for cancer immunotherapy. ([Utzschneider](https://www.nature.com/articles/s41590-020-0760-z#auth-Daniel_T_-Utzschneider)[et al.](https://www.nature.com/articles/s41590-020-0760-z), [Siddiqui et al.](https://pubmed.ncbi.nlm.nih.gov/30635237/)).
+Pioneering work in the murine lymphocytic choriomeningitis virus (LCMV) model has mapped the molecular and phenotypic profiles of CD8+ T cells, revealing progenitors of exhausted T cells (TPEX), defined by the expression of transcription factors, TOX and TCF1. These cells arise in the acute-phase of infection and sustain terminally exhausted subsets over the long-term. As they are thought to renew the pool of terminally exhausted cells, an increasing number of reports show that this population is of primary importance for cancer immunotherapy. ([Utzschneider](https://www.nature.com/articles/s41590-020-0760-z#auth-Daniel_T_-Utzschneider)[et al.](https://www.nature.com/articles/s41590-020-0760-z), [Siddiqui et al.](https://pubmed.ncbi.nlm.nih.gov/30635237/)).
 
-Here are some marker genes to help identifying them:
+Here are some marker genes to help identify them:
 
 [Positive markers:]{.underline} TCF7, CD200, CRTAM, GNG4, TOX, LEF1, CCR7, CXCL13, XCL1, XCL2
 
@@ -132,7 +132,7 @@ Here are some marker genes to help identifying them:
 
 ![](images/image-1262540734.png)
 
-Tumor T cell differentiation model, going through a intermediate state of progenitor exhausted (Tpex). Figure from [Andreatta et al. 2021](https://www.nature.com/articles/s41467-021-23324-4/figures/9).
+Tumor T cell differentiation model, going through an intermediate state of progenitor exhausted (Tpex). Figure from [Andreatta et al. 2021](https://www.nature.com/articles/s41467-021-23324-4/figures/9).
 
 Tpex importance is of growing interest, but except a few studies ([Oliveira et al.](https://www.nature.com/articles/s41586-021-03704-y), [Magen et al.](https://www.biorxiv.org/content/10.1101/2022.06.22.497216v1.full), [Zheng et al.](https://www.science.org/doi/abs/10.1126/science.abe6474)), this subset has been harder to detect in human. Having a human CD8 reference with clearly annotated Tpex solves this issue.
 
@@ -175,11 +175,11 @@ p <- plot.states.radar(ref.cd8, query = gueguen.cd3, min.cells = 10, genes4radar
 wrap_plots(p) + theme_bw()
 ```
 
-We can see that the previously homogeneous cluster CD8-LAYN seems to be in fact composed of two subsets: CD8.TEX and CD8.TPEX.
+We can see that the previously homogeneous cluster CD8-LAYN seems to be composed of two subsets: CD8.TEX and CD8.TPEX.
 
 <details> <summary style="display:list-item"> How to assess quality/robustness of mapping </summary>
 
-It can be hard to make the call between cells modified, and cells plainly wrongly mapped. We usually recommend to assess mapping consistency by checking consistency among top markers. If the query seems quite different from the reference, we recommend to understand DEGs between the reference and the query, for each cell type of interest.
+It can be hard to make the call between cells modified, and cells plainly wrongly mapped. We usually recommend assessing mapping consistency by checking consistency among top markers. If the query seems quite different from the reference, we recommend understanding DEGs between the reference and the query, for each cell type of interest.
 
 </details>
 
@@ -201,8 +201,6 @@ DimPlot(Yost.cd3, reduction = 'umap', group.by = 'cluster', label = T)
 DimPlot(Yost.cd3, reduction = 'umap', group.by = 'patient', label = T, repel = T)
 ```
 
-Now we can have a look at the original study annotation, including clusters. We can see that activation cluster (CD8_act) is patient specific, as it seems driven mainly by patient **su008** after receiving immunotherapy treatment.
-
 ## Projection
 
 As this dataset is a mix between CD4 and CD8 T cells, we will keep the parameter `filter.cells` as TRUE to keep only CD8+ T cells.
@@ -223,7 +221,7 @@ p <- plot.states.radar(ref.cd8, query = Yost.cd3, min.cells = 10, genes4radar = 
 wrap_plots(p) + theme_bw()
 ```
 
-We can see that in Yost et al. dataset, CD8.TPEX can be found with profiles matching the reference. TPEX are found scattered all over the original UMAP space. This is because activation signals and other confounding factors were contributing to defining UMAP space. Reference-based annotation allow to uncover cell types behind the activation program. If you are interested in recovering cell types hidden by transient cell states, you can read more in the [corresponding tutorial](https://carmonalab.github.io/human_CD8_TIL_CaseStudies/Transient_gene_programs.html).
+We can see that in Yost et al. dataset, CD8.TPEX can be found with profiles matching the reference. TPEX are found scattered all over the original UMAP space. This is because activation signals and other confounding factors were contributing to defining UMAP space. Reference-based annotation uncovers cell types behind the activation program. If you are interested in recovering cell types hidden by transient cell states, you can read more in the [corresponding tutorial](https://carmonalab.github.io/human_CD8_TIL_CaseStudies/Transient_gene_programs.html).
 
 <details><summary style="display:list-item"> Session Info </summary>
 

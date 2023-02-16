@@ -51,7 +51,7 @@ DimPlot(ref.cd8,  group.by = 'functional.cluster', label = T, repel = T, cols = 
 
 # Setup data
 
-Data was extracted from [Yost et al. 2019](https://www.nature.com/articles/s41591-019-0522-3).
+Data were extracted from [Yost et al. 2019](https://www.nature.com/articles/s41591-019-0522-3).
 ```{r}
 # Load data
 #download.file("https://figshare.com/ndownloader/files/39109277", destfile = "Yost.cd3.Rds")
@@ -66,7 +66,7 @@ DimPlot(Yost.cd3, reduction = 'umap', group.by = 'cluster', label = T)
 DimPlot(Yost.cd3, reduction = 'umap', group.by = 'patient', label = T, repel = T)
 ```
 
-Now we can have a look at the original study annotation, including clusters. We can see that activation cluster (CD8_act) is patient specific, as it seems driven mainly by patient **su008** after receiving immunotherapy treatment.
+Now we can have a look at the original study annotation, including clusters. We can see that the activation cluster (CD8_act) is patient-specific, as it seems driven mainly by patient **su008** after receiving immunotherapy treatment.
 
 # Projection
 
@@ -98,7 +98,7 @@ DefaultAssay(Yost.cd3.sub) <- 'RNA'
 FeaturePlot(Yost.cd3.sub, features = c('IL7R','FGFBP2','GZMK'), ncol = 3, pt.size = 0.5, order = T, cols = pals::coolwarm()) & NoLegend()
 ```
 
-We see that in original reduced space, within the activated cluster, we recover cell types from our CD8 reference, including CM, TEMRA and EM clusters (respectively high for IL7R, FGFBP2 and GZMK). If you are interested in recovering cell types hidden by transient cell states, you can read more in the [corresponding tutorial](https://carmonalab.github.io/human_CD8_TIL_CaseStudies/Transient_gene_programs.html).
+We see that in the original reduced space, within the activated cluster, we recover cell types from our CD8 reference, including CM, TEMRA and EM clusters (respectively high for IL7R, FGFBP2 and GZMK). If you are interested in recovering cell types hidden by transient cell states, you can read more in the [corresponding tutorial](https://carmonalab.github.io/human_CD8_TIL_CaseStudies/Transient_gene_programs.html).
 
 <details><summary style="display:list-item"> Session Info </summary>
 
