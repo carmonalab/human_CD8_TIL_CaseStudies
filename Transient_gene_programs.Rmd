@@ -1,6 +1,6 @@
 ---
-title: CD8 TIL projection uncover cells types hidden by transient gene programs
-subtitle: Cell-Cycle, interferon and Tissue-residency gene programs 
+title: Augmenting reference subtype classifications using gene programs
+subtitle: An example quantifying proliferation, response to interferons and tissue-residency gene programs across T cell subtypes
 date: "`r Sys.Date()`"
 author: "P. Gueguen, M. Andreatta and S. Carmona"
 output:
@@ -40,46 +40,36 @@ library(grid)
 
 # Background
 
-Cells responding to external cues might overexpress transient gene programs. In scRNA-seq data, clusters will be driven by the strongest variation component, which can be sometimes transient gene programs. These programs such as the cell cycle, might hide the original, potentially more stable cell types.
+Cells responding to external cues can transiently activate gene programs, or groups of genes that are collectively involved in specific gene processes, such as cell division, or response to interferons. In scRNA-seq data, transcriptional variance can be largely explained by these transient gene expression programs masking differences between different cell types, and leading to the clustering of cells of different types.
 
-These are among the main types of programs that classically are being upregulated in scRNA-seq data:
+Some typical gene programs observed in T cell scRNA-seq data:
 
--   **Cell cycle**, when cells go through division (eg. MCM5, TOP2A)
+-   **Cell cycle** (eg. MCM5, TOP2A)
 
--   **IFN response**, in response to IFN stimulation (eg. MX1, ISG15)
+-   **Interferon (IFN) response** (eg. MX1, ISG15)
 
--   **HSP response**, in response to stress (eg. HSPA1, HSPA2)
+-   **Heat shock protein (HSP) response** (eg. HSPA1, HSPA2)
 
--   **Activation** response, in response to an activation signal, eg TCR engagement (eg. JUN, FOS)
+-   **TCR Activation** (eg. JUN, FOS, NR4A1)
 
--   **Tissue-residency** program, when cells infiltrate and home within tissues (eg. ZNF683, ITGAE)
+-   **Tissue-residency** a program associated to homing and/or retention of T cells in non-lymphoid tissues (eg. ZNF683, ITGAE)
 
-Note: while some programs are transient (like the cell cycle), some programs might be more permanent / epigenetically fixed. The distinction between transient and permanent might be harder for some programs, like tissue-residency. We argue here that having a well-curated reference, free from many transient gene programs, will help in distinguishing transient from more stable cell states.
 
-Here we will see how we use reference-based projection to uncover the original cell types from **Cycling**, **IFN-activated** and **Tissue-resident** cells using data from [Gueguen et al. 2021](https://www.science.org/doi/10.1126/sciimmunol.abd5778).
+Here we will show to use reference-based projection to classify cells into robust subtypes, irrespective of the activation of transient gene programs, but still recover this important information to more granularly define cell states.
 
-<details>
+In this example we will use data from [Gueguen et al. 2021](https://www.science.org/doi/10.1126/sciimmunol.abd5778).
 
-<summary style="display:list-item">
-
-How to identify gene programs?
-
-</summary>
-
-Coregulated gene sets can also be found using previously defined literature but also using unsupervised techniques. Gene modules can be found using PCA, ICA, [cNMF](https://elifesciences.org/articles/43803), [scCoGAPS](https://www.cell.com/cell-systems/pdfExtended/S2405-4712(19)30146-2), or `find_gene_modules` from [Monocle3](https://cole-trapnell-lab.github.io/monocle3/docs/differential/#gene-modules), which runs UMAP on the genes and then groups them into modules using Louvain clustering. Here, for simplicity, we chose to focus on literature base markers, which are easily explainable, explicit programs.
-
-</details>
 
 # Data setup
 
-## Loading the CD8 reference
+## Loading the reference map
 
-First, let's load the CD8 TIL reference by downloading it from Figshare.
+First, let's download and load the CD8 TIL reference map Seurat object
 
 ```{r, message=FALSE, warning=F}
 # Load the reference
 options(timeout = max(900, getOption("timeout")))
-#download.file("https://figshare.com/ndownloader/files/38921366", destfile = "CD8T_human_ref_v1.rds")
+download.file("https://figshare.com/ndownloader/files/38921366", destfile = "CD8T_human_ref_v1.rds")
 ref.cd8 <- load.reference.map("CD8T_human_ref_v1.rds")
 
 # Setup colors
@@ -89,70 +79,71 @@ mycols <- ref.cd8@misc$atlas.palette
 DimPlot(ref.cd8,  group.by = 'functional.cluster', label = T, repel = T, cols = mycols) + theme(aspect.ratio = 1)
 ```
 
-We see that the reference is composed only of stable cell types. Indeed, cells expressing highly transient gene programs (Cycling and IFN) were removed when constructing the reference. HSP / activation-high cells were removed by the stringent mitochondrial gene filter applied.
+We can verify the reference map only contains "stable" or "basal" cell types (cells strongly expressing transient gene programs, such as cell division, IFN-response, and HSP-response were removed from the reference by design).
 
-## Load Gueguen et al. data
+## Load query data
+
+Download and load Seurat object containing the pre-annotated Gueguen dataset.
+In this example, the original author annotations are available in the `seurat_clusters` metadata column
 
 ```{r, message=F, warning=F}
-#download.file("https://figshare.com/ndownloader/files/39082049", destfile = "gueguen.cd3.Rds")
+download.file("https://figshare.com/ndownloader/files/39082049", destfile = "gueguen.cd3.Rds")
 gueguen.cd3 <- readRDS("gueguen.cd3.Rds")
+DefaultAssay(gueguen.cd3) <- "RNA"
 gueguen.cd3$seurat_clusters <- Idents(gueguen.cd3)
 
 # DimPlot
 DimPlot(gueguen.cd3, order = T,  label = T, repel = T) 
 ```
 
-# Projection using reference map
+# ProjecTILs reference-based classification 
 
-The first step is to project using [ProjecTILs](https://github.com/carmonalab/ProjecTILs) `ProjecTILs.classifier` function. This projection mode will give us the labels while keeping the original UMAP embeddings.
+Next we will run [ProjecTILs](https://github.com/carmonalab/ProjecTILs) `ProjecTILs.classifier` function. This running mode will add the predicted celltype labels as metadata (i.e. `functional.cluster`), while keeping intact the original low dimensional embeddings.
+
+Here we will run the prediction separately for each patient/sample contained in the dataset. To this end, we include the parameter `split.by` indicating the metadata column containing the sample information (in this example `orig.ident`).
+
 
 ```{r, message=F, warning=F, fig.height=5, fig.width=8}
 # Projection
-DefaultAssay(gueguen.cd3) <- "RNA"
 gueguen.cd3 <- ProjecTILs.classifier(gueguen.cd3, ref = ref.cd8, filter.cells = T, split.by = 'orig.ident', ncores = 6)
-table(gueguen.cd3$functional.cluster)
 
 # Plotting
 DimPlot(gueguen.cd3, group.by = 'functional.cluster', order = T, cols = mycols, label = T, repel = T)
+
+table(gueguen.cd3$functional.cluster)
 ```
 
-# Augmenting cell type classifications with gene program scores
+# Augmenting cell states resolution by quantifying activation of gene programs
 
-To further augment granularity, here we divide the dataset by computing signatures scores using [UCell](https://github.com/carmonalab/UCell). To this end, we use our collection of useful transcriptional gene signatures: [SignatuR](https://github.com/carmonalab/SignatuR), as well as manually curated signatures.
-
-Here, we will use signatures generated for:
-
--   G1S cell cycle
-
--   G2M cell cycle
-
--   IFN response
-
--   Tissue residency
+To further sub-classify T cell reference subtypes according to the activation of gene programs, we will use [UCell](https://github.com/carmonalab/UCell). In this example we will also use [SignatuR](https://github.com/carmonalab/SignatuR) that stores useful gene signatures (e.g cell cycle).
 
 ```{r warning=F, message=F, eval=T}
 library(SignatuR)
 signatures <- GetSignature(SignatuR$Hs)
 signatures <- signatures[c("cellCycle.G1S","cellCycle.G2M")]
 
-# Using manual signatures for IFN and resident, which work better with UCell than the full signatures from SignatuR package
+# for IFN and tissue-residecy we will simply define them manually
 signatures[["IFN"]] <- c("ISG15","IFI6","IFI44L","MX1")
 signatures[["Tissue_Resident"]] <-  c("ITGAE")
 ```
 
-Now let's compute the scores using `UCell`.
+Now let's compute the gene signature scores using `UCell`
 
 ```{r, eval=T}
 gueguen.cd3 <- AddModuleScore_UCell(gueguen.cd3, features = signatures, ncores = 8,
                        assay = "RNA")
 ```
 
+We can visualize these scores on the UMAP, and verify their agreement with the original author annotations (CD4/8-MCM5, CD4/8-TOP2A cell clusters with high cycling score, and CD4/8-ISG15 cluster with high IFN response score).
+
 ```{r, fig.height=15, fig.width=16}
 FeaturePlot(gueguen.cd3, features = paste0(names(signatures), "_UCell"),
     order = T, pt.size = 0.3) & scale_color_paletteer_c("pals::coolwarm") 
 ```
 
-We see that these signatures correlate with the annotation of the original paper. It's especially clear for the Cycling and IFN signals, that were largely contained into their own cluster (CD4/8-MCM5, CD4/8-TOP2A clusters for cycling, and CD4/8-ISG15 cluster for IFN).
+
+We can now classify each cell into low/high for each gene program, according to their signature scores.
+
 
 <details>
 
@@ -162,7 +153,7 @@ Signatures scores distributions
 
 </summary>
 
-We can check signatures scores distribution to decide which threshold to put to distinguish negative/positive cells. Here we will select the value of 0.2.
+We can explore signatures scores distributions and set a threshold to classify cells into negative/positive for each gene program. Here we will use a global threshold of 0.2.
 
 ```{r, message=FALSE, warning=F, fig.width=10, fig.height=10}
 qplot(gueguen.cd3$cellCycle.G1S_UCell, main = "G1S-Cycling") +
@@ -171,24 +162,26 @@ qplot(gueguen.cd3$cellCycle.G1S_UCell, main = "G1S-Cycling") +
 
 </details>
 
-Using `UCell` scores, we can split the data into high and low for each signature. Let's do the test here with the G1S-cycling signature.
+Example with the G1S-cycling signature:
 
 ```{r, fig.width=12, fig.height=5}
-# subset resident high cells in the CD8 reference
+
 cycling.G1S.high <- subset(gueguen.cd3, subset = cellCycle.G1S_UCell > 0.2)
 cycling.G1S.low <- subset(gueguen.cd3, subset = cellCycle.G1S_UCell <= 0.2)
 
-# Set list
+
 cycling.G1S.list <- list(cycling.G1S.low,cycling.G1S.high)
 names(cycling.G1S.list) <- c("cycling.G1S.low","cycling.G1S.high")
 ```
 
+Visualize using ProjecTILs `plot.states.radar` function
+
 ```{r, fig.height=8, fig.width=15}
-# Radars to check differences between resident / non resident
+
 plot.states.radar(ref = ref.cd8, query = cycling.G1S.list, labels.col = 'functional.cluster', min.cells = 5, genes4radar = c("SELL","LEF1","TCF7","CCR7","KLF2","GZMK", "GZMA", "FCGR3A","FGFBP2","XCL1","XCL2", "KLRB1",'MCM5',"MCM3","TOP2A")) 
 ```
 
-Cycling-G1S high and Cycling-G1S low cells display the same overall phenotypes, but differ in their expression of key cycling genes, upregulated when cells start to cycle, such as MCM5, MCM3 and TOP2A.
+Here Cycling-G1S high and Cycling-G1S low cells display gene expression profiles in terms of marker genes, but differ in their expression of cell cycle genes, such as MCM5, MCM3 and TOP2A.
 
 Now we can do this for the 4 signatures that we selected at the beginning.
 
@@ -217,9 +210,11 @@ pll[[x]] <- plot(ggplot(data, aes_string(x = "functional.cluster", y = "Frequenc
 wrap_plots(pll, guides = "collect")
 ```
 
-As previously shown, CD8.TEX and CD8.TPEX are the most cycling, resident and IFN-responding subsets. Results will vary depending on the signatures chosen, the UCell threshold chosen.
+As previously shown, CD8.TEX and CD8.TPEX populations contain the highest frequency of proliferating, tissue-resident and IFN-responding cells.
 
-# Upset plot to check program co-occurences
+# Bonus track
+
+## Upset plot to check program co-occurences
 
 Let's focus on the CD8.TEX population, and see how the different gene programs relate using a UpSet plot, using [UpSetR](https://github.com/hms-dbmi/UpSetR) package.
 
@@ -235,15 +230,15 @@ upset(fromList(listInput), order.by = "freq")
 grid.text("CD8.TEX gene programs overlap",x = 0.65, y=0.95, gp=gpar(fontsize=12))
 ```
 
-We can see that in CD8.TEX, broadly half of the IFN high cells are also high for the tissue-residency program.
+We can see that roughly one third of CD8.TEX with high tissue-residency program are also high for IFN-response program.
 
-# Comparison with the original annotation
+## Comparison with the original annotation
 
-In the original study, the authors use Seurat `TransferData` function to transfer labels from the non-cycling clusters to the cycling clusters ('CD4/8-TOP2A', 'CD4/8-MCM5'). With label transfer, Cycling cells are defined as CD8.LAYN and CD8.GZMH.
+In the original study, cycling cells are defined as "CD8.LAYN" and "CD8.GZMH"
 
 ![](images/image-633566997.png){width="500"}
 
-Now let's compare this result with our projection results. First, let's select the 2 cycling clusters.
+Now let's compare this with ProjecTILs classifications. First, let's subset cells in the 2 cycling clusters CD4/8-TOP2A and CD4/8-MCM5.
 
 ```{r}
 gueguen.cycling <- subset(gueguen.cd3, subset = seurat_clusters %in% c('CD4/8-TOP2A', "CD4/8-MCM5"))
@@ -253,19 +248,21 @@ DimPlot(gueguen.cycling, group.by = 'functional.cluster', label = T, repel = T, 
 ```
 
 We can have a look at clusters proportions in the original cycling clusters.
+It seems that there is more heterogeneity among cycling cells than previously observed, including Central Memory and Effector Memory T cells.
 
 ```{r}
 plot.statepred.composition(ref.cd8, gueguen.cycling, metric = "Percent") +
     ggtitle("Cycling cells") + ylim(0, 75) + theme_bw() + RotatedAxis()
 ```
 
+
 Let's check radar plots to confirm identities, where we included some markers genes for cell cycle: TOP2A, MCM5 and MCM3.
 
 ```{r, fig.height=8, fig.width=15}
-plot.states.radar(ref = ref.cd8, query = gueguen.cycling, labels.col = 'functional.cluster', min.cells = 5, genes4radar = c("SELL","LEF1","TCF7","CCR7","KLF2","GZMK", "GZMA", "FCGR3A","FGFBP2","XCL1","XCL2", "KLRB1",'MCM5',"MCM3","TOP2A"))
+plot.states.radar(ref = ref.cd8, query = gueguen.cycling, labels.col = 'functional.cluster', min.cells = 5, genes4radar = c("SELL","LEF1","TCF7","CCR7","KLF2","GZMK", "GZMA", "FCGR3A","FGFBP2","XCL1","KLRB1",'MCM5',"MCM3","TOP2A","PDCD1","TOX","HAVCR2"))
 ```
 
-The radar plots match well between the reference and the query. It seems that we have indeed less differentiated cells in the cycling compartment (Central Memory and Effector Memory). Projection seems more robust than Seurat label transfer to uncover cell types hidden behind transient gene programs.
+The marker gene profiles support a correct classification. 
 
 <details>
 
