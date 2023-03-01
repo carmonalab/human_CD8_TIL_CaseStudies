@@ -14,29 +14,32 @@ knit: (function(input_file, encoding) {
   output_file=file.path(dirname(input_file), out_dir, 'Detecting_Tpex.html'))})
 ---
 
-In this tutorial, we will present how to use ProjecTILs to detect Tpex in public datasets that were not detecting them. This CD8 human TILs reference was built using [Nick Borcherding collection](https://github.com/ncborcherding/utility) of single-cell datasets from tumor patients. The map consists of 11,021 high-quality single-cell transcriptomes from 20 samples, covering 7 tumor types.
+In this tutorial we highlight ProjecTILs ability to detect CD8+ ["Tpex" (Progenitor of exhausted)](https://www.nature.com/articles/s41590-022-01219-w), a rare population of memory CD8+ T cells that sustain CD8 T cell immunity in the context of chronic viral infection and cancer. These CD8 T cells are typically defined by co-expression of TCF1, PD-1 and TOX. 
+They are of primary importance in cancer therapy, as they are thought to renew the pool of terminally exhausted CD8 T cells in response to PD-1/PD-L1  blockade [Siddiqui et al.](https://pubmed.ncbi.nlm.nih.gov/30635237/)
 
-The process and code to build the map can be found in [this Github repo](https://github.com/carmonalab/human_TIL_atlas_construction).
+![](images/image-1262540734.png){width="600"}
 
-Briefly, this reference was built using curated CD8+ T cells from 20 tumor-infiltrating patients, and integrated using [semi-supervised STACAS](https://carmonalab.github.io/STACAS.demo/STACAS.demo.html#semi-supervised-integration). Unsupervised clustering was performed on the integrated samples. Clusters were manually annotated with respect to classical immunology markers, with a special interest in detecting Tpex. Clusters were later downsampled to have at most 2000 cells per cluster. In our experience, this optimized cluster balance improves projection, as reported [here](https://www.biorxiv.org/content/10.1101/2023.01.25.525533v1.full.pdf) and [here](https://www.biorxiv.org/content/10.1101/2022.10.06.511156v2.full.pdf). Finally, this map was converted as a [ProjecTILs](https://github.com/carmonalab/ProjecTILs) reference. Please note that, as this reference was constructed with tumor-infiltrating samples, it might not work perfectly when mapping other tissues, such as blood or draining lymph nodes (DLN).
+Tumor T cell differentiation model, going through an intermediate state of progenitor exhausted (Tpex). Figure from [Andreatta et al. 2021](https://www.nature.com/articles/s41467-021-23324-4/figures/9).
+
+
+
+ProjecTILs classifies cells by projecting them onto a reference map. Here we will use our reference map of human tumor-infiltrating CD8 T cells. You can find more information about this map [here](https://github.com/carmonalab/CD8_human_TIL_atlas_construction)
 
 <details>
 
 <summary style="display:list-item">
 
-Why doing projection?
+Why using ProjecTILs to classify cell subtypes?
 
 </summary>
 
-Projection classifies cells using a well curated `ProjecTILs` reference map.
+-   Obtain consistent cell annotations across datasets
 
--   This method has the benefit of using the same cell types across projects, which is especially beneficial when analyzing huge collections of datasets.
+-   Classify cells into reference subtypes, irrespective of activation of transient gene programs, such as cell cycle.
 
--   This reference is also a way to annotate datasets only by stable cell types, and not transient cell states, like cell cycle or activation.
+-   Avoid use of subjective, dataset-specific parameters, such as the selection of highly variable genes, number of clusters, etc.
 
--   Results will be comparable across conditions, as there is little manual tuning. For instance, there is no need for steps that can have a high impact, such as the selection of highly variable genes.
-
--   Projection is robust to batch effects, like single-cell technologies or sequencing depth (for more information, please read ProjecTILs paper - [Andreatta et al. 2021](https://www.nature.com/articles/s41467-021-23324-4)).
+-   Projection is robust to batch effects, single-cell technologies, sequencing depth (for more information, please read ProjecTILs paper - [Andreatta et al. 2021](https://www.nature.com/articles/s41467-021-23324-4)).
 
 </details>
 
@@ -44,11 +47,11 @@ Projection classifies cells using a well curated `ProjecTILs` reference map.
 
 <summary style="display:list-item">
 
-What happens if some cells are not covered by the reference
+What happens if the input data contains cells that do not match the the reference map cell type?
 
 </summary>
 
-If some cells are not covered by the reference, they automatically get filtered-out (eg. CD4 T cells if the reference is CD8 T cells).
+If the input data contain cell types not included in the reference map(eg. CD4 T cells if the reference is for CD8 T cells) they automatically get filtered-out.
 
 By default, both `Run.ProjecTILs()` and `ProjecTILs.classifier()` have the parameter `filter.cells` set as `TRUE`. This means that cells out of reference will be filtered-out using the built-in [`scGate`](https://github.com/carmonalab/scGate) model. This model is stored in the slot misc of the reference [`Seurat`](https://github.com/satijalab/seurat) object: `ref@misc$scGate`. You can custom this filtering by amending this slot using [`scGate`](https://github.com/carmonalab/scGate) grammar.
 
@@ -108,9 +111,9 @@ Here are the different T cell subsets defined in the map:
 
 -   [**CD8.TEX:**]{style="color:#f5d39f"} Exhausted T cells
 
--   [**CD8.MAIT:**]{style="color:#fdbfd4"} MAIT cells, innate-like T cells defined by their semi-invariant αβ T cell receptor (TCR)
+-   [**CD8.MAIT:**]{style="color:#fdbfd4"} Mucosal-associated invariant T cells, innate-like T cells defined by their semi-invariant αβ T cell receptor
 
-Let's check Differentially Expressed Genes (DEGs) between each cluster, to confirm clusters marker genes.
+Let's check Differentially Expressed Genes (DEGs) between subtypes and verify expected marker genes:
 
 ```{r, message = F, warning=FALSE, fig.height=10, fig.width=7}
 # Compute DEGs
@@ -127,19 +130,11 @@ markers %>% group_by(cluster) %>% top_n(n = 3, wt = avg_log2FC) -> top3
 VlnPlot(ref.cd8, assay = "RNA", features  = top3$gene, cols = mycols, stack = T, flip = T, fill.by = "ident") + NoLegend()
 ```
 
-# Progenitors exhauted (Tpex)
-
-Pioneering work in the murine lymphocytic choriomeningitis virus (LCMV) model has mapped the molecular and phenotypic profiles of CD8+ T cells, revealing progenitors of exhausted T cells (TPEX), defined by the expression of transcription factors, TOX and TCF1. These cells arise in the acute-phase of infection and sustain terminally exhausted subsets over the long-term. As they are thought to renew the pool of terminally exhausted cells, an increasing number of reports show that this population is of primary importance for cancer immunotherapy. ([Utzschneider](https://www.nature.com/articles/s41590-020-0760-z#auth-Daniel_T_-Utzschneider)[et al.](https://www.nature.com/articles/s41590-020-0760-z), [Siddiqui et al.](https://pubmed.ncbi.nlm.nih.gov/30635237/)).
-
-Here are some marker genes to help identify them:
+Here are some marker genes to help manually identify Tpex:
 
 [Positive markers:]{.underline} TCF7, CD200, CRTAM, GNG4, TOX, LEF1, CCR7, CXCL13, XCL1, XCL2
 
 [Negative markers:]{.underline} GZMB, NKG7, PRF1, HAVCR2, CCL5, GZMA
-
-![](images/image-1262540734.png){width="600"}
-
-Tumor T cell differentiation model, going through an intermediate state of progenitor exhausted (Tpex). Figure from [Andreatta et al. 2021](https://www.nature.com/articles/s41467-021-23324-4/figures/9).
 
 Let's display 6 positive and 6 negative TPEX markers, that are especially useful to distinguish TPEX from closely related TEX.
 
@@ -148,7 +143,7 @@ DefaultAssay(ref.cd8) <- 'RNA'
 FeaturePlot(ref.cd8, features = c('TCF7','XCL1','XCL2',"CXCL13","TOX","CRTAM","GZMB","NKG7","CCL5","HAVCR2","PRF1","GZMA"), ncol = 3, pt.size = 0.2, order = T, cols = pals::coolwarm()) & NoLegend()
 ```
 
-Tpex importance is of growing interest, but except a few studies ([Oliveira et al.](https://www.nature.com/articles/s41586-021-03704-y), [Magen et al.](https://www.biorxiv.org/content/10.1101/2022.06.22.497216v1.full), [Zheng et al.](https://www.science.org/doi/abs/10.1126/science.abe6474)), this subset has been harder to detect in human. Having a human CD8 reference with clearly annotated Tpex solves this issue.
+Despite their great releveance, Tpex are often missed in tumor scRNA-seq studies.
 
 # Detecting Tpex in [Gueguen et al. 2021](https://www.science.org/doi/10.1126/sciimmunol.abd5778)
 
@@ -162,7 +157,7 @@ gueguen.cd3$seurat_clusters <- Idents(gueguen.cd3)
 
 ## Projection
 
-Thanks to automatic scGate filtering, only the CD8 clusters (upper part of the UMAP) were mapped.
+Thanks to automatic scGate filtering, only the CD8 clusters (upper part of the UMAP) are annotated.
 
 ```{r, message=F, warning=F, fig.height=5, fig.width=10}
 # Projection
@@ -195,11 +190,12 @@ We can see that the previously homogeneous cluster CD8-LAYN is actually composed
 
 <summary style="display:list-item">
 
-How to assess quality/robustness of mapping
+How to assess quality of mapping?
 
 </summary>
 
-It can be hard to make the call between cells modified, and cells plainly wrongly mapped. We usually recommend assessing mapping consistency by checking consistency among top markers. If the query seems quite different from the reference, we recommend understanding DEGs between the reference and the query, for each cell type of interest.
+The first thing we recommend to do is verifying the expression of expected marker genes. IN additoin, ProjecTILs provides multiple tools to help the researcher decide if the projection and classification are accurate (e.g. https://carmonalab.github.io/ProjecTILs_CaseStudies/novelstate.html).
+
 
 </details>
 
@@ -233,7 +229,7 @@ table(Yost.cd3$functional.cluster)
 DimPlot(Yost.cd3, group.by = 'functional.cluster', order = T, cols = mycols, label = T, repel = T)
 ```
 
-We indeed detect TPEX. Let's check globally how the expression profiles look.
+Here again we detect TPEX. Let's check globally how the expression profiles of marker genes look.
 
 ```{r, fig.height=8, fig.width=15}
 # Radar plots
@@ -241,7 +237,7 @@ p <- plot.states.radar(ref.cd8, query = Yost.cd3, min.cells = 10, genes4radar = 
 wrap_plots(p) + theme_bw()
 ```
 
-We can see that in Yost et al. dataset, CD8.TPEX can be found with profiles matching the reference. TPEX are found scattered all over the original UMAP space. This is because activation signals and other confounding factors were contributing to defining UMAP space. Reference-based annotation uncovers cell types behind the activation program. If you are interested in recovering cell types hidden by transient cell states, you can read more in the [corresponding tutorial](https://carmonalab.github.io/human_CD8_TIL_CaseStudies/Transient_gene_programs.html).
+We can see that predicted CD8.TPEX displey consistent marker gene profiles. In the authors' original UMAP space, however, TPEX are found scattered. This is because activation signals and other confounding factors were contributing to defining the UMAP space. Reference-based annotation uncovers cell type signals masked by the activation program. If you are interested in recovering cell type identities hidden by transient cell states, you can read more in the [corresponding tutorial](https://carmonalab.github.io/human_CD8_TIL_CaseStudies/Transient_gene_programs.html).
 
 <details>
 
