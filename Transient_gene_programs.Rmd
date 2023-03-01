@@ -54,11 +54,9 @@ Some typical gene programs observed in T cell scRNA-seq data:
 
 -   **Tissue-residency** a program associated to homing and/or retention of T cells in non-lymphoid tissues (eg. ZNF683, ITGAE)
 
-
 Here we will show to use reference-based projection to classify cells into robust subtypes, irrespective of the activation of transient gene programs, but still recover this important information to more granularly define cell states.
 
 In this example we will use data from [Gueguen et al. 2021](https://www.science.org/doi/10.1126/sciimmunol.abd5778).
-
 
 # Data setup
 
@@ -83,10 +81,9 @@ We can verify the reference map only contains "stable" or "basal" cell types (ce
 
 ## Load query data
 
-Download and load Seurat object containing the pre-annotated Gueguen dataset.
-In this example, the original author annotations are available in the `seurat_clusters` metadata column
+Download and load Seurat object containing the pre-annotated Gueguen dataset. In this example, the original author annotations are available in the `seurat_clusters` metadata column
 
-```{r, message=F, warning=F}
+```{r, message=F, warning=F, fig.height=5, fig.width=9}
 download.file("https://figshare.com/ndownloader/files/39082049", destfile = "gueguen.cd3.Rds")
 gueguen.cd3 <- readRDS("gueguen.cd3.Rds")
 DefaultAssay(gueguen.cd3) <- "RNA"
@@ -96,14 +93,13 @@ gueguen.cd3$seurat_clusters <- Idents(gueguen.cd3)
 DimPlot(gueguen.cd3, order = T,  label = T, repel = T) 
 ```
 
-# ProjecTILs reference-based classification 
+# ProjecTILs reference-based classification
 
 Next we will run [ProjecTILs](https://github.com/carmonalab/ProjecTILs) `ProjecTILs.classifier` function. This running mode will add the predicted celltype labels as metadata (i.e. `functional.cluster`), while keeping intact the original low dimensional embeddings.
 
 Here we will run the prediction separately for each patient/sample contained in the dataset. To this end, we include the parameter `split.by` indicating the metadata column containing the sample information (in this example `orig.ident`).
 
-
-```{r, message=F, warning=F, fig.height=5, fig.width=8}
+```{r, message=F, warning=F, fig.height=5, fig.width=7}
 # Projection
 gueguen.cd3 <- ProjecTILs.classifier(gueguen.cd3, ref = ref.cd8, filter.cells = T, split.by = 'orig.ident', ncores = 6)
 
@@ -119,9 +115,13 @@ To further sub-classify T cell reference subtypes according to the activation of
 
 ```{r warning=F, message=F, eval=T}
 library(SignatuR)
-signatures <- GetSignature(SignatuR$Hs)
-signatures <- signatures[c("cellCycle.G1S","cellCycle.G2M")]
+# Load Human signatures
+signatuR.list <- GetSignature(SignatuR$Hs)
 
+# Select cycling signature and merge the two cycling phases
+signatures <- list()
+signatures[["Cycling"]] <- unlist(signatuR.list[c("cellCycle.G1S","cellCycle.G2M")])
+  
 # for IFN and tissue-residecy we will simply define them manually
 signatures[["IFN"]] <- c("ISG15","IFI6","IFI44L","MX1")
 signatures[["Tissue_Resident"]] <-  c("ITGAE")
@@ -141,9 +141,7 @@ FeaturePlot(gueguen.cd3, features = paste0(names(signatures), "_UCell"),
     order = T, pt.size = 0.3) & scale_color_paletteer_c("pals::coolwarm") 
 ```
 
-
 We can now classify each cell into low/high for each gene program, according to their signature scores.
-
 
 <details>
 
@@ -155,33 +153,31 @@ Signatures scores distributions
 
 We can explore signatures scores distributions and set a threshold to classify cells into negative/positive for each gene program. Here we will use a global threshold of 0.2.
 
-```{r, message=FALSE, warning=F, fig.width=10, fig.height=10}
-qplot(gueguen.cd3$cellCycle.G1S_UCell, main = "G1S-Cycling") +
-    qplot(gueguen.cd3$cellCycle.G2M_UCell, main = "G2M-Cycling") + qplot(gueguen.cd3$IFN_UCell, main = "IFN") + qplot(gueguen.cd3$Tissue_Resident_UCell, main = "Tissue Resident") & theme_bw()
+```{r, message=FALSE, warning=F, fig.width=10, fig.height=4}
+qplot(gueguen.cd3$Cycling_UCell, main = "Cycling") + qplot(gueguen.cd3$IFN_UCell, main = "IFN") + qplot(gueguen.cd3$Tissue_Resident_UCell, main = "Tissue Resident") & theme_bw()
 ```
 
 </details>
+</br>
 
-Example with the G1S-cycling signature:
+Example with the Cycling signature:
 
 ```{r, fig.width=12, fig.height=5}
+cycling.high <- subset(gueguen.cd3, subset = Cycling_UCell > 0.2)
+cycling.low <- subset(gueguen.cd3, subset = Cycling_UCell <= 0.2)
 
-cycling.G1S.high <- subset(gueguen.cd3, subset = cellCycle.G1S_UCell > 0.2)
-cycling.G1S.low <- subset(gueguen.cd3, subset = cellCycle.G1S_UCell <= 0.2)
 
-
-cycling.G1S.list <- list(cycling.G1S.low,cycling.G1S.high)
-names(cycling.G1S.list) <- c("cycling.G1S.low","cycling.G1S.high")
+cycling.list <- list(cycling.low,cycling.high)
+names(cycling.list) <- c("cycling.low","cycling.high")
 ```
 
 Visualize using ProjecTILs `plot.states.radar` function
 
 ```{r, fig.height=8, fig.width=15}
-
-plot.states.radar(ref = ref.cd8, query = cycling.G1S.list, labels.col = 'functional.cluster', min.cells = 5, genes4radar = c("SELL","LEF1","TCF7","CCR7","KLF2","GZMK", "GZMA", "FCGR3A","FGFBP2","XCL1","XCL2", "KLRB1",'MCM5',"MCM3","TOP2A")) 
+plot.states.radar(ref = ref.cd8, query = cycling.list, labels.col = 'functional.cluster', min.cells = 5, genes4radar = c("SELL","LEF1","TCF7","CCR7","KLF2","GZMK", "GZMA", "FCGR3A","FGFBP2","XCL1","XCL2", "KLRB1",'MCM5',"MCM3","TOP2A")) 
 ```
 
-Here Cycling-G1S high and Cycling-G1S low cells display gene expression profiles in terms of marker genes, but differ in their expression of cell cycle genes, such as MCM5, MCM3 and TOP2A.
+Here Cycling high and Cycling low cells display gene expression profiles in terms of marker genes, but differ in their expression of cell cycle genes, such as MCM5, MCM3 and TOP2A.
 
 Now we can do this for the 4 signatures that we selected at the beginning.
 
@@ -202,11 +198,11 @@ colnames(data) <- c("Class","functional.cluster","Frequency")
   levels.order <- data |> group_by(functional.cluster) |> filter(Class == "Negative") |> arrange(-Frequency) |> select(functional.cluster)
   data$functional.cluster <- factor(x = data$functional.cluster, levels = levels.order$functional.cluster)
 pll[[x]] <- plot(ggplot(data, aes_string(x = "functional.cluster", y = "Frequency",
-        fill = "Class")) + geom_bar(position="fill", stat="identity") + scale_fill_manual(values = c("grey","firebrick2")) + theme_cowplot() + RotatedAxis() + ggtitle(paste("Frequencies for signature", x)))
+        fill = "Class")) + geom_bar(position="fill", stat="identity") + scale_fill_manual(values = c("grey","firebrick2")) + theme_cowplot() + RotatedAxis() + ggtitle(paste("Signature", x)))
 }
 ```
 
-```{r, fig.width=12, fig.height=8}
+```{r, fig.width=12, fig.height=5}
 wrap_plots(pll, guides = "collect")
 ```
 
@@ -221,8 +217,7 @@ Let's focus on the CD8.TEX population, and see how the different gene programs r
 ```{r}
 gueguen.cd3.TEX <- subset(gueguen.cd3, subset = functional.cluster == "CD8.TEX")
 listInput <- list(IFN = which(gueguen.cd3.TEX$IFN.class == "Positive"), 
-                  Cycling.G2M = which(gueguen.cd3.TEX$cellCycle.G2M.class == "Positive"), 
-                  Cycling.G1S = which(gueguen.cd3.TEX$cellCycle.G1S.class == "Positive"),
+                  Cycling = which(gueguen.cd3.TEX$Cycling.class == "Positive"),
                   Tissue_resident = which(gueguen.cd3.TEX$Tissue_Resident.class == "Positive"))
 
 
@@ -247,14 +242,12 @@ gueguen.cycling <- subset(gueguen.cd3, subset = seurat_clusters %in% c('CD4/8-TO
 DimPlot(gueguen.cycling, group.by = 'functional.cluster', label = T, repel = T, cols = mycols)
 ```
 
-We can have a look at clusters proportions in the original cycling clusters.
-It seems that there is more heterogeneity among cycling cells than previously observed, including Central Memory and Effector Memory T cells.
+We can have a look at clusters proportions in the original cycling clusters. It seems that there is more heterogeneity among cycling cells than previously observed, including Central Memory and Effector Memory T cells.
 
 ```{r}
 plot.statepred.composition(ref.cd8, gueguen.cycling, metric = "Percent") +
     ggtitle("Cycling cells") + ylim(0, 75) + theme_bw() + RotatedAxis()
 ```
-
 
 Let's check radar plots to confirm identities, where we included some markers genes for cell cycle: TOP2A, MCM5 and MCM3.
 
@@ -262,7 +255,7 @@ Let's check radar plots to confirm identities, where we included some markers ge
 plot.states.radar(ref = ref.cd8, query = gueguen.cycling, labels.col = 'functional.cluster', min.cells = 5, genes4radar = c("SELL","LEF1","TCF7","CCR7","KLF2","GZMK", "GZMA", "FCGR3A","FGFBP2","XCL1","KLRB1",'MCM5',"MCM3","TOP2A","PDCD1","TOX","HAVCR2"))
 ```
 
-The marker gene profiles support a correct classification. 
+The marker gene profiles support a correct classification.
 
 <details>
 
