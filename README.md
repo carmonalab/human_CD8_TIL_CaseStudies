@@ -9,9 +9,6 @@ Projection example using a human CD8 TIL reference map. The pipeline to build th
 ### Detecting Tpex
 - https://carmonalab.github.io/human_CD8_TIL_CaseStudies/Detecting_Tpex.html
 
-### Uncovering activation signal in Yost et al. 
-- https://carmonalab.github.io/human_CD8_TIL_CaseStudies/Activation_Yost.html
-
 For more projection examples, you can find them here: [ProjecTILs_CaseStudies](https://github.com/carmonalab/ProjecTILs_CaseStudies).
 
 
