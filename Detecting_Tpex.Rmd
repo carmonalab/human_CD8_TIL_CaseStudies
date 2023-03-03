@@ -1,5 +1,5 @@
 ---
-title: Detecting CD8 Tpex with ProjecTILs
+title: Detecting CD8 TPEX with ProjecTILs
 date: "`r Sys.Date()`"
 author: "P. Gueguen, M. Andreatta and S. Carmona"
 output:
@@ -11,14 +11,14 @@ output:
 knit: (function(input_file, encoding) {
   out_dir <- 'docs';
   rmarkdown::render(input_file, encoding=encoding,
-  output_file=file.path(dirname(input_file), out_dir, 'Detecting_Tpex.html'))})
+  output_file=file.path(dirname(input_file), out_dir, 'Detecting_TPEX.html'))})
 ---
 
-In this tutorial we highlight ProjecTILs ability to detect CD8+ ["Tpex" (Progenitor of exhausted)](https://www.nature.com/articles/s41590-022-01219-w), a rare population of memory CD8+ T cells that sustain CD8 T cell immunity in the context of chronic viral infection and cancer. These CD8 T cells are typically defined by co-expression of TCF1, PD-1 and TOX. They are of primary importance in cancer therapy, as they are thought to renew the pool of terminally exhausted CD8 T cells in response to PD-1/PD-L1 blockade [Siddiqui et al.](https://pubmed.ncbi.nlm.nih.gov/30635237/)
+In this tutorial we highlight ProjecTILs ability to detect CD8+ ["TPEX" (Progenitor of exhausted)](https://www.nature.com/articles/s41590-022-01219-w), a rare population of memory CD8+ T cells that sustain CD8 T cell immunity in the context of chronic viral infection and cancer. These CD8 T cells are typically defined by co-expression of TCF1, PD-1 and TOX. They are of primary importance in cancer therapy, as they are thought to renew the pool of terminally exhausted CD8 T cells in response to PD-1/PD-L1 blockade [Siddiqui et al.](https://pubmed.ncbi.nlm.nih.gov/30635237/)
 
 ![](images/image-1262540734.png){width="600"}
 
-Tumor T cell differentiation model, going through an intermediate state of progenitor exhausted (Tpex). Figure from [Andreatta et al. 2021](https://www.nature.com/articles/s41467-021-23324-4/figures/9).
+Tumor T cell differentiation model, going through an intermediate state of progenitor exhausted (TPEX). Figure from [Andreatta et al. 2021](https://www.nature.com/articles/s41467-021-23324-4/figures/9).
 
 ProjecTILs classifies cells by projecting them onto a reference map. Here we will use our reference map of human tumor-infiltrating CD8 T cells. You can find more information about this map [here](https://github.com/carmonalab/CD8_human_TIL_atlas_construction).
 
@@ -127,7 +127,7 @@ markers %>% group_by(cluster) %>% top_n(n = 3, wt = avg_log2FC) -> top3
 VlnPlot(ref.cd8, assay = "RNA", features  = top3$gene, cols = mycols, stack = T, flip = T, fill.by = "ident") + NoLegend()
 ```
 
-Here are some marker genes to help manually identify Tpex:
+Here are some marker genes to help manually identify TPEX:
 
 [Positive markers:]{.underline} TCF7, CD200, CRTAM, GNG4, TOX, LEF1, CCR7, CXCL13, XCL1, XCL2
 
@@ -140,9 +140,9 @@ DefaultAssay(ref.cd8) <- 'RNA'
 FeaturePlot(ref.cd8, features = c('TCF7','XCL1','XCL2',"CXCL13","TOX","CRTAM","GZMB","NKG7","CCL5","HAVCR2","PRF1","GZMA"), ncol = 3, pt.size = 0.2, order = T, cols = pals::coolwarm()) & NoLegend()
 ```
 
-Despite their great releveance, Tpex are often missed in tumor scRNA-seq studies.
+Despite their great releveance, TPEX are often missed in tumor scRNA-seq studies.
 
-# Detecting Tpex in [Gueguen et al. 2021](https://www.science.org/doi/10.1126/sciimmunol.abd5778)
+# Detecting TPEX in [Gueguen et al. 2021](https://www.science.org/doi/10.1126/sciimmunol.abd5778)
 
 ## Setup data
 
@@ -191,11 +191,11 @@ How to assess quality of mapping?
 
 </summary>
 
-The first thing we recommend to do is verifying the expression of expected marker genes. IN additoin, ProjecTILs provides multiple tools to help the researcher decide if the projection and classification are accurate (e.g. <https://carmonalab.github.io/ProjecTILs_CaseStudies/novelstate.html>).
+The first thing we recommend to do is verifying the expression of expected marker genes. In addition, ProjecTILs provides multiple tools to help the researcher decide if the projection and classification are accurate (e.g. <https://carmonalab.github.io/ProjecTILs_CaseStudies/novelstate.html>).
 
 </details>
 
-# Detecting Tpex in [Yost et al. 2019](https://www.nature.com/articles/s41591-019-0522-3)
+# Detecting TPEX in [Yost et al. 2019](https://www.nature.com/articles/s41591-019-0522-3)
 
 ## Setup data
 
